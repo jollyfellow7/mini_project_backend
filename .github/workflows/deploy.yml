@@ -1,3 +1,6 @@
+# env는 이 repo의 GitHub Actions Secrets → EC2 docker run -e 로만 주입 (EC2 .env 없음)
+# 프론트(Vercel)에는 API_URL만 — GEMINI/DATABASE는 백엔드 시크릿 전용
+
 name: Mini API 빌드 · Docker Hub · EC2 배포
 
 on:
@@ -7,7 +10,7 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/mini-cleaning-api
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/mini_project
   DOCKER_TAG: latest
 
 jobs:
@@ -32,19 +35,18 @@ jobs:
             ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
             ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
 
-      - name: DB 시크릿 존재 확인
+      - name: 배포용 시크릿 확인
         run: |
-          N="${{ secrets.NEON_DB_URL }}"
-          D="${{ secrets.DATABASE_URL }}"
-          if [ -z "$N" ] && [ -z "$D" ]; then
-            echo "::error::NEON_DB_URL 또는 DATABASE_URL 중 하나가 필요합니다."
+          if [ -z "${{ secrets.DATABASE_URL }}" ]; then
+            echo "::error::DATABASE_URL 시크릿이 필요합니다 (Neon postgresql://...?sslmode=require)."
             exit 1
           fi
-
-      - name: GEMINI_API_KEY 확인
-        run: |
           if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then
             echo "::error::GEMINI_API_KEY 시크릿이 필요합니다."
+            exit 1
+          fi
+          if [ -z "${{ secrets.EC2_HOST }}" ] || [ -z "${{ secrets.EC2_USERNAME }}" ] || [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "::error::EC2_HOST, EC2_USERNAME, EC2_SSH_KEY 가 필요합니다."
             exit 1
           fi
 
@@ -60,16 +62,17 @@ jobs:
             docker stop mini-cleaning-api || true
             docker rm mini-cleaning-api || true
             docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
+            CORS_ENV=""
+            if [ -n '${{ secrets.CORS_ORIGINS }}' ]; then
+              CORS_ENV="-e CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}"
+            fi
             docker run -d \
               --name mini-cleaning-api \
               --restart always \
               -p 8080:8080 \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-              -e NEON_DB_URL="${{ secrets.NEON_DB_URL }}" \
-              -e NEON_DB_USERNAME="${{ secrets.NEON_DB_USERNAME }}" \
-              -e NEON_DB_PASSWORD="${{ secrets.NEON_DB_PASSWORD }}" \
               -e GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
-              -e CORS_ORIGINS='${{ secrets.CORS_ORIGINS }}' \
+              $CORS_ENV \
               ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
             sleep 15
             curl -fsS http://127.0.0.1:8080/health
