@@ -1,5 +1,5 @@
-# env는 이 repo의 GitHub Actions Secrets → EC2 docker run -e 로만 주입 (EC2 .env 없음)
-# 프론트(Vercel)에는 API_URL만 — GEMINI/DATABASE는 백엔드 시크릿 전용
+# env: GitHub Actions Secrets → EC2 docker run -e (EC2 .env 없음)
+# 시크릿: NEON_DB_*, JWT_SECRET, GEMINI_API_KEY, DOCKERHUB_*, EC2_*
 
 name: Mini API 빌드 · Docker Hub · EC2 배포
 
@@ -37,8 +37,16 @@ jobs:
 
       - name: 배포용 시크릿 확인
         run: |
-          if [ -z "${{ secrets.DATABASE_URL }}" ]; then
-            echo "::error::DATABASE_URL 시크릿이 필요합니다 (Neon postgresql://...?sslmode=require)."
+          if [ -z "${{ secrets.NEON_DB_URL }}" ]; then
+            echo "::error::NEON_DB_URL 시크릿이 필요합니다 (jdbc:postgresql://...)."
+            exit 1
+          fi
+          if [ -z "${{ secrets.NEON_DB_USERNAME }}" ] || [ -z "${{ secrets.NEON_DB_PASSWORD }}" ]; then
+            echo "::error::NEON_DB_USERNAME, NEON_DB_PASSWORD 시크릿이 필요합니다."
+            exit 1
+          fi
+          if [ -z "${{ secrets.JWT_SECRET }}" ]; then
+            echo "::error::JWT_SECRET 시크릿이 필요합니다."
             exit 1
           fi
           if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then
@@ -70,7 +78,10 @@ jobs:
               --name mini-cleaning-api \
               --restart always \
               -p 8080:8080 \
-              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              -e NEON_DB_URL="${{ secrets.NEON_DB_URL }}" \
+              -e NEON_DB_USERNAME="${{ secrets.NEON_DB_USERNAME }}" \
+              -e NEON_DB_PASSWORD="${{ secrets.NEON_DB_PASSWORD }}" \
+              -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
               -e GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
               $CORS_ENV \
               ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}

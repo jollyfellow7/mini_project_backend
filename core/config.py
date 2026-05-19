@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
 
     GEMINI_API_KEY: str = ""
+    JWT_SECRET: str = ""
 
     CORS_ORIGINS: List[str] = [
         "http://localhost:3111",

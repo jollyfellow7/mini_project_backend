@@ -16,7 +16,7 @@ async def get_pool() -> asyncpg.Pool:
         dsn = settings.database_url
         if not dsn:
             raise RuntimeError(
-                "Database URL is not configured. Set DATABASE_URL or NEON_DB_URL."
+                "Database URL is not configured. Set NEON_DB_URL (+ NEON_DB_USERNAME/PASSWORD)."
             )
         ssl = "require" if "neon.tech" in dsn else None
         _pool = await asyncpg.create_pool(
