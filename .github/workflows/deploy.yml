@@ -45,10 +45,6 @@ jobs:
             echo "::error::NEON_DB_USERNAME, NEON_DB_PASSWORD 시크릿이 필요합니다."
             exit 1
           fi
-          if [ -z "${{ secrets.JWT_SECRET }}" ]; then
-            echo "::error::JWT_SECRET 시크릿이 필요합니다."
-            exit 1
-          fi
           if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then
             echo "::error::GEMINI_API_KEY 시크릿이 필요합니다."
             exit 1
@@ -70,9 +66,12 @@ jobs:
             docker stop mini-cleaning-api || true
             docker rm mini-cleaning-api || true
             docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
-            CORS_ENV=""
+            EXTRA_ENV=""
+            if [ -n '${{ secrets.JWT_SECRET }}' ]; then
+              EXTRA_ENV="$EXTRA_ENV -e JWT_SECRET=${{ secrets.JWT_SECRET }}"
+            fi
             if [ -n '${{ secrets.CORS_ORIGINS }}' ]; then
-              CORS_ENV="-e CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}"
+              EXTRA_ENV="$EXTRA_ENV -e CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}"
             fi
             docker run -d \
               --name mini-cleaning-api \
@@ -81,9 +80,8 @@ jobs:
               -e NEON_DB_URL="${{ secrets.NEON_DB_URL }}" \
               -e NEON_DB_USERNAME="${{ secrets.NEON_DB_USERNAME }}" \
               -e NEON_DB_PASSWORD="${{ secrets.NEON_DB_PASSWORD }}" \
-              -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
               -e GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
-              $CORS_ENV \
+              $EXTRA_ENV \
               ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
             sleep 15
             curl -fsS http://127.0.0.1:8080/health
