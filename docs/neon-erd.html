@@ -97,11 +97,11 @@
   <div class="legend">
     <span><i class="dot pk"></i> PK / 복합 PK</span>
     <span><i class="dot fk"></i> FK → parent_accounts</span>
-    <span>로그인: <code>/parent/login</code> → <strong>3jo</strong> / <strong>1234</strong></span>
+    <span>로그인: <code>/parent/login</code> → Neon <code>parent_accounts</code> (SHA-256 <code>password_hash</code>)</span>
   </div>
 
   <div class="seed">
-    <strong>시드 계정</strong> — <code>parent_accounts</code> 테이블 · <code>login_id='3jo'</code>, 비밀번호 SHA-256 해시 ·
+    <strong>부모 계정</strong> — <code>parent_accounts</code> · 비밀번호는 DB 해시만 · 신규는 <code>POST /auth/signup</code> ·
     부모 1명 = 가족 1단위 · 자녀·로그·포인트·상점·제안 모두 <code>parent_account_id</code>로 분리
   </div>
 

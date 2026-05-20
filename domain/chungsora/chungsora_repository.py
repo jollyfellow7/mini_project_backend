@@ -13,13 +13,6 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
-_DEMO_DATE = "2026-05-20"
-_DEMO_BEFORE = "https://picsum.photos/seed/chungsora-before/480/360"
-_DEMO_AFTER = "https://picsum.photos/seed/chungsora-after/480/360"
-
-_SEED_PARENT_LOGIN_ID = "3jo"
-_SEED_PARENT_PASSWORD = "1234"
-
 
 def _password_hash(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
@@ -215,60 +208,9 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
 
 
 async def _seed_defaults(conn: asyncpg.Connection) -> None:
-    row = await conn.fetchrow(
-        """
-        INSERT INTO parent_accounts (login_id, password_hash, display_name)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (login_id) DO UPDATE
-          SET password_hash = EXCLUDED.password_hash,
-              display_name = EXCLUDED.display_name
-        RETURNING id
-        """,
-        _SEED_PARENT_LOGIN_ID,
-        _password_hash(_SEED_PARENT_PASSWORD),
-        "부모",
-    )
-    parent_id = row["id"]
+    from domain.chungsora.parent_account_seed import apply_defaults_for_db_parents
 
-    await _seed_parent_defaults(conn, parent_id)
-
-    n = await conn.fetchval(
-        """
-        SELECT COUNT(*) FROM cleaning_logs
-        WHERE log_date = $1 AND parent_account_id = $2
-        """,
-        datetime.strptime(_DEMO_DATE, "%Y-%m-%d").date(),
-        parent_id,
-    )
-    if n == 0:
-        await conn.execute(
-            """
-            INSERT INTO cleaning_logs (parent_account_id, log_date, score, streak_days, before_url, after_url)
-            VALUES ($1, $2, 88, 5, $3, $4)
-            """,
-            parent_id,
-            datetime.strptime(_DEMO_DATE, "%Y-%m-%d").date(),
-            _DEMO_BEFORE,
-            _DEMO_AFTER,
-        )
-        demo_msgs = [
-            ("m1", "child", "오늘 방 청소 완료했어요!", None),
-            ("m2", "parent", "정말 깔끔해졌네!", "특급칭찬"),
-            ("m3", "child", "고마워요 엄마", None),
-        ]
-        for mid, role, text, badge in demo_msgs:
-            await conn.execute(
-                """
-                INSERT INTO log_messages (id, parent_account_id, log_date, role, text, badge)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                """,
-                mid,
-                parent_id,
-                datetime.strptime(_DEMO_DATE, "%Y-%m-%d").date(),
-                role,
-                text,
-                badge,
-            )
+    await apply_defaults_for_db_parents(conn, _seed_parent_defaults)
 
 
 async def _seed_parent_defaults(conn: asyncpg.Connection, parent_id: int) -> None:
@@ -323,7 +265,7 @@ class ChungsoraRepository:
                 """
                 SELECT id, login_id, display_name, password_hash
                 FROM parent_accounts
-                WHERE login_id = $1
+                WHERE LOWER(login_id) = LOWER($1)
                 """,
                 login_id,
             )
@@ -342,7 +284,8 @@ class ChungsoraRepository:
         name = (display_name or login_id).strip()
         async with self._pool.acquire() as conn:
             exists = await conn.fetchval(
-                "SELECT 1 FROM parent_accounts WHERE login_id = $1", login_id
+                "SELECT 1 FROM parent_accounts WHERE LOWER(login_id) = LOWER($1)",
+                login_id,
             )
             if exists:
                 raise ValueError("duplicate_login_id")
