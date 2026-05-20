@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 from contextlib import asynccontextmanager
-from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -9,9 +7,9 @@ from fastapi.staticfiles import StaticFiles
 from api.router import api_router
 from core.config import settings
 from core.database import close_pool, get_pool
+from core.upload_paths import resolve_upload_root, upload_dir_writable
 
-_UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
-_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+_UPLOAD_DIR = resolve_upload_root()
 
 
 @asynccontextmanager
@@ -48,7 +46,13 @@ async def health_ready():
         pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.fetchval("SELECT 1")
-        return {"status": "ready", "database": "ok"}
+        uploads_ok = upload_dir_writable()
+        body = {"status": "ready", "database": "ok", "uploads": "ok" if uploads_ok else "not_writable"}
+        if not uploads_ok:
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(status_code=503, content=body)
+        return body
     except Exception as exc:
         from fastapi.responses import JSONResponse
 

@@ -129,6 +129,8 @@ Docker Hub 이미지: **`jiminsong02/mini_project`**
 
 docker ps
 
+docker inspect mini-cleaning-api --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+
 docker logs -f mini-cleaning-api
 
 curl http://127.0.0.1:8080/health
@@ -136,6 +138,40 @@ curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/health/ready
 
 ```
+
+
+
+### 4-1. uploads 볼륨 (baseline·고스트 이미지 유지)
+
+
+
+재배포해도 사진/영상이 사라지지 않도록 **호스트 디렉터리**를 컨테이너에 마운트합니다.
+
+
+
+| 위치 | 경로 |
+
+|------|------|
+
+| EC2 호스트 | `/var/lib/mini-cleaning/uploads` |
+
+| 컨테이너 | `/app/uploads` (`UPLOAD_DIR=/app/uploads`) |
+
+| baseline·로그 파일 | `/app/uploads/logs/{parent_id}/{date}/...` |
+
+| URL | `/uploads/logs/...` → FastAPI StaticFiles |
+
+
+
+`main` push 배포 시 GHA가 `mkdir` + `docker run -v ...` 를 자동 적용합니다. 수동 1회 설정: `scripts/setup-ec2-uploads-volume.sh`
+
+
+
+**주의:** 볼륨 적용 **이전**에 컨테이너 안에만 있던 파일은 복구되지 않습니다. 부모 baseline·자녀 촬영을 한 번 다시 올려야 할 수 있습니다.
+
+
+
+`/health/ready` 응답에 `"uploads": "ok"` 가 포함되어야 쓰기 가능합니다. `not_writable` 이면 볼륨 마운트·권한을 확인하세요.
 
 
 
@@ -182,6 +218,8 @@ curl http://127.0.0.1:8080/health/ready
 | chungsora 401 | `JWT_SECRET` 일치, Authorization Bearer |
 
 | 밖에서 8080 안 됨 | AWS 보안 그룹 TCP **8080** 인바운드 |
+
+| baseline URL 404 · 고스트 안 보임 | `curl :8080/health/ready` → `uploads: ok` · EC2 `ls /var/lib/mini-cleaning/uploads/logs` · 부모 baseline 재촬영 |
 
 
 

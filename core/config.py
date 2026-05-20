@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     NEON_DB_USERNAME: str = ""
     NEON_DB_PASSWORD: str = ""
 
+    # EC2: /app/uploads (호스트 볼륨 마운트). 비우면 mini_backend/uploads
+    UPLOAD_DIR: str = ""
+
     @property
     def database_url(self) -> str:
         if self.DATABASE_URL:

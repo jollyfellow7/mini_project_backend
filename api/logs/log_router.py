@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from api.deps.auth_deps import FamilyContext, get_family_context
+from core.upload_paths import resolve_upload_logs_root
 from domain.chungsora.chungsora_repository import get_chungsora_repo
 
 router = APIRouter()
 
-_UPLOAD_ROOT = Path(__file__).resolve().parents[2] / "uploads" / "logs"
+_UPLOAD_ROOT = resolve_upload_logs_root()
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _YEAR_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
