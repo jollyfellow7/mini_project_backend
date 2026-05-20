@@ -28,8 +28,18 @@ def _password_hash(password: str) -> str:
 async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS parent_accounts (
+                id            SERIAL PRIMARY KEY,
+                login_id      VARCHAR(64) NOT NULL UNIQUE,
+                password_hash VARCHAR(128) NOT NULL,
+                display_name  VARCHAR(120) NOT NULL DEFAULT '',
+                created_at    TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS cleaning_logs (
-                log_date      DATE PRIMARY KEY,
+                parent_account_id INT NOT NULL REFERENCES parent_accounts(id) ON DELETE CASCADE,
+                log_date      DATE NOT NULL,
                 score         INT NOT NULL DEFAULT 0,
                 streak_days   INT NOT NULL DEFAULT 0,
                 before_url    TEXT,
@@ -39,7 +49,8 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS log_messages (
                 id         TEXT PRIMARY KEY,
-                log_date   DATE NOT NULL REFERENCES cleaning_logs(log_date) ON DELETE CASCADE,
+                parent_account_id INT,
+                log_date   DATE NOT NULL,
                 role       VARCHAR(10) NOT NULL,
                 text       TEXT NOT NULL,
                 badge      TEXT,
@@ -49,17 +60,9 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS praise_presets (
                 id         SERIAL PRIMARY KEY,
-                phrase     VARCHAR(40) NOT NULL UNIQUE,
+                phrase     VARCHAR(40) NOT NULL,
+                parent_account_id INT REFERENCES parent_accounts(id) ON DELETE CASCADE,
                 created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS parent_accounts (
-                id            SERIAL PRIMARY KEY,
-                login_id      VARCHAR(64) NOT NULL UNIQUE,
-                password_hash VARCHAR(128) NOT NULL,
-                display_name  VARCHAR(120) NOT NULL DEFAULT '',
-                created_at    TIMESTAMPTZ DEFAULT NOW()
             )
         """)
         await conn.execute("""
@@ -204,47 +207,49 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
                 at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        from domain.chungsora.schema_migrations import migrate_per_user_isolation
+
+        await migrate_per_user_isolation(conn)
         await _seed_defaults(conn)
     logger.info("[chungsora] tables initialized")
 
 
 async def _seed_defaults(conn: asyncpg.Connection) -> None:
-    n = await conn.fetchval("SELECT COUNT(*) FROM parent_accounts")
-    parent_id = None
-    if n == 0:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO parent_accounts (login_id, password_hash, display_name)
-            VALUES ($1, $2, $3)
-            RETURNING id
-            """,
-            _SEED_PARENT_LOGIN_ID,
-            _password_hash(_SEED_PARENT_PASSWORD),
-            "부모",
-        )
-        parent_id = row["id"]
-    else:
-        parent_id = await conn.fetchval(
-            "SELECT id FROM parent_accounts ORDER BY id LIMIT 1"
-        )
+    row = await conn.fetchrow(
+        """
+        INSERT INTO parent_accounts (login_id, password_hash, display_name)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (login_id) DO UPDATE
+          SET password_hash = EXCLUDED.password_hash,
+              display_name = EXCLUDED.display_name
+        RETURNING id
+        """,
+        _SEED_PARENT_LOGIN_ID,
+        _password_hash(_SEED_PARENT_PASSWORD),
+        "부모",
+    )
+    parent_id = row["id"]
 
     await _seed_parent_defaults(conn, parent_id)
 
     n = await conn.fetchval(
-        "SELECT COUNT(*) FROM cleaning_logs WHERE log_date = $1 AND parent_account_id = $2",
+        """
+        SELECT COUNT(*) FROM cleaning_logs
+        WHERE log_date = $1 AND parent_account_id = $2
+        """,
         datetime.strptime(_DEMO_DATE, "%Y-%m-%d").date(),
         parent_id,
     )
     if n == 0:
         await conn.execute(
             """
-            INSERT INTO cleaning_logs (log_date, score, streak_days, before_url, after_url, parent_account_id)
-            VALUES ($1, 88, 5, $2, $3, $4)
+            INSERT INTO cleaning_logs (parent_account_id, log_date, score, streak_days, before_url, after_url)
+            VALUES ($1, $2, 88, 5, $3, $4)
             """,
+            parent_id,
             datetime.strptime(_DEMO_DATE, "%Y-%m-%d").date(),
             _DEMO_BEFORE,
             _DEMO_AFTER,
-            parent_id,
         )
         demo_msgs = [
             ("m1", "child", "오늘 방 청소 완료했어요!", None),
@@ -254,10 +259,11 @@ async def _seed_defaults(conn: asyncpg.Connection) -> None:
         for mid, role, text, badge in demo_msgs:
             await conn.execute(
                 """
-                INSERT INTO log_messages (id, log_date, role, text, badge)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO log_messages (id, parent_account_id, log_date, role, text, badge)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 """,
                 mid,
+                parent_id,
                 datetime.strptime(_DEMO_DATE, "%Y-%m-%d").date(),
                 role,
                 text,
@@ -274,7 +280,8 @@ async def _seed_parent_defaults(conn: asyncpg.Connection, parent_id: int) -> Non
             await conn.execute(
                 """
                 INSERT INTO praise_presets (phrase, parent_account_id)
-                VALUES ($1, $2) ON CONFLICT DO NOTHING
+                VALUES ($1, $2)
+                ON CONFLICT (parent_account_id, phrase) DO NOTHING
                 """,
                 phrase,
                 parent_id,
@@ -455,11 +462,11 @@ class ChungsoraRepository:
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO cleaning_logs (log_date, parent_account_id) VALUES ($1, $2)
-                ON CONFLICT (log_date) DO NOTHING
+                INSERT INTO cleaning_logs (parent_account_id, log_date) VALUES ($1, $2)
+                ON CONFLICT (parent_account_id, log_date) DO NOTHING
                 """,
-                d,
                 parent_id,
+                d,
             )
 
     async def get_log(self, parent_id: int, date_str: str) -> dict[str, Any]:
@@ -470,18 +477,19 @@ class ChungsoraRepository:
                 """
                 SELECT score, streak_days, before_url, after_url
                 FROM cleaning_logs
-                WHERE log_date = $1 AND (parent_account_id = $2 OR parent_account_id IS NULL)
-                ORDER BY parent_account_id NULLS LAST
-                LIMIT 1
+                WHERE parent_account_id = $1 AND log_date = $2
                 """,
-                d,
                 parent_id,
+                d,
             )
             msgs = await conn.fetch(
                 """
                 SELECT id, role, text, badge, at
-                FROM log_messages WHERE log_date = $1 ORDER BY at
+                FROM log_messages
+                WHERE parent_account_id = $1 AND log_date = $2
+                ORDER BY at
                 """,
+                parent_id,
                 d,
             )
         messages = []
@@ -514,20 +522,20 @@ class ChungsoraRepository:
                 await conn.execute(
                     """
                     UPDATE cleaning_logs SET score = $3
-                    WHERE log_date = $1 AND (parent_account_id = $2 OR parent_account_id IS NULL)
+                    WHERE parent_account_id = $1 AND log_date = $2
                     """,
-                    d,
                     parent_id,
+                    d,
                     score,
                 )
             if streak_days is not None:
                 await conn.execute(
                     """
                     UPDATE cleaning_logs SET streak_days = $3
-                    WHERE log_date = $1 AND (parent_account_id = $2 OR parent_account_id IS NULL)
+                    WHERE parent_account_id = $1 AND log_date = $2
                     """,
-                    d,
                     parent_id,
+                    d,
                     streak_days,
                 )
         return await self.get_log(parent_id, date_str)
@@ -540,10 +548,10 @@ class ChungsoraRepository:
             await conn.execute(
                 f"""
                 UPDATE cleaning_logs SET {col} = $3
-                WHERE log_date = $1 AND (parent_account_id = $2 OR parent_account_id IS NULL)
+                WHERE parent_account_id = $1 AND log_date = $2
                 """,
-                d,
                 parent_id,
+                d,
                 url,
             )
 
@@ -556,10 +564,11 @@ class ChungsoraRepository:
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO log_messages (id, log_date, role, text, badge)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO log_messages (id, parent_account_id, log_date, role, text, badge)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 """,
                 msg_id,
+                parent_id,
                 d,
                 role,
                 text.strip(),
@@ -584,7 +593,7 @@ class ChungsoraRepository:
                 SELECT log_date::text AS d, score
                 FROM cleaning_logs
                 WHERE to_char(log_date, 'YYYY-MM') = $1
-                  AND (parent_account_id = $2 OR parent_account_id IS NULL)
+                  AND parent_account_id = $2
                   AND (score > 0 OR before_url IS NOT NULL OR after_url IS NOT NULL)
                 ORDER BY log_date
                 """,
@@ -601,7 +610,7 @@ class ChungsoraRepository:
             rows = await conn.fetch(
                 """
                 SELECT phrase FROM praise_presets
-                WHERE parent_account_id = $1 OR parent_account_id IS NULL
+                WHERE parent_account_id = $1
                 ORDER BY created_at DESC LIMIT 8
                 """,
                 parent_id,
@@ -616,7 +625,8 @@ class ChungsoraRepository:
             await conn.execute(
                 """
                 INSERT INTO praise_presets (phrase, parent_account_id)
-                VALUES ($1, $2) ON CONFLICT (phrase) DO NOTHING
+                VALUES ($1, $2)
+                ON CONFLICT (parent_account_id, phrase) DO NOTHING
                 """,
                 phrase,
                 parent_id,
@@ -628,7 +638,7 @@ class ChungsoraRepository:
             await conn.execute(
                 """
                 DELETE FROM praise_presets
-                WHERE phrase = $1 AND (parent_account_id = $2 OR parent_account_id IS NULL)
+                WHERE phrase = $1 AND parent_account_id = $2
                 """,
                 phrase.strip(),
                 parent_id,
@@ -724,7 +734,7 @@ class ChungsoraRepository:
             rows = await conn.fetch(
                 """
                 SELECT id, label, won FROM shop_rewards
-                WHERE parent_account_id = $1 OR parent_account_id IS NULL
+                WHERE parent_account_id = $1
                 ORDER BY sort_order, id
                 """,
                 parent_id,
@@ -752,7 +762,7 @@ class ChungsoraRepository:
                 await conn.execute(
                     """
                     UPDATE shop_rewards SET label = $3
-                    WHERE id = $1 AND (parent_account_id = $2 OR parent_account_id IS NULL)
+                    WHERE id = $1 AND parent_account_id = $2
                     """,
                     reward_id,
                     parent_id,
@@ -762,7 +772,7 @@ class ChungsoraRepository:
                 await conn.execute(
                     """
                     UPDATE shop_rewards SET won = $3
-                    WHERE id = $1 AND (parent_account_id = $2 OR parent_account_id IS NULL)
+                    WHERE id = $1 AND parent_account_id = $2
                     """,
                     reward_id,
                     parent_id,
@@ -775,7 +785,7 @@ class ChungsoraRepository:
             await conn.execute(
                 """
                 DELETE FROM shop_rewards
-                WHERE id = $1 AND (parent_account_id = $2 OR parent_account_id IS NULL)
+                WHERE id = $1 AND parent_account_id = $2
                 """,
                 reward_id,
                 parent_id,
@@ -787,7 +797,7 @@ class ChungsoraRepository:
             rows = await conn.fetch(
                 """
                 SELECT id, title, description, active FROM daily_quests
-                WHERE (parent_account_id = $1 OR parent_account_id IS NULL) AND active = TRUE
+                WHERE parent_account_id = $1 AND active = TRUE
                 ORDER BY id DESC
                 """,
                 parent_id,
@@ -822,7 +832,7 @@ class ChungsoraRepository:
             await conn.execute(
                 """
                 UPDATE daily_quests SET active = FALSE
-                WHERE id = $1 AND (parent_account_id = $2 OR parent_account_id IS NULL)
+                WHERE id = $1 AND parent_account_id = $2
                 """,
                 quest_id,
                 parent_id,

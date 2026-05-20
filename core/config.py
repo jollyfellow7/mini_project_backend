@@ -23,6 +23,8 @@ class Settings(BaseSettings):
         "http://localhost:34567",
         "http://localhost:3111",
         "http://localhost:3000",
+        "https://mini3.cloud",
+        "https://www.mini3.cloud",
     ]
 
     DATABASE_URL: str = ""

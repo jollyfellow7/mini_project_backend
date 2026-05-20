@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>청소해라 · Neon PostgreSQL ERD</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --border: #2d3a4f;
+      --accent: #00b8cf;
+      --accent2: #7c3aed;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --pk: #fbbf24;
+      --fk: #4ade80;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 24px;
+    }
+    h1 { font-size: 1.5rem; margin: 0 0 8px; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 24px; }
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 24px;
+      font-size: 0.85rem;
+    }
+    .legend span { display: flex; align-items: center; gap: 6px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot.pk { background: var(--pk); }
+    .dot.fk { background: var(--fk); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+      max-width: 1400px;
+    }
+    .entity {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .entity.core { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(0,184,207,.15); }
+    .entity.cleaning { border-color: var(--accent2); }
+    .entity h2 {
+      margin: 0;
+      padding: 10px 14px;
+      font-size: 0.95rem;
+      background: rgba(0,0,0,.25);
+      border-bottom: 1px solid var(--border);
+    }
+    .entity.core h2 { color: var(--accent); }
+    .entity.cleaning h2 { color: #c4b5fd; }
+    .cols { padding: 8px 0; font-size: 0.82rem; font-family: Consolas, monospace; }
+    .col {
+      padding: 3px 14px;
+      display: flex; justify-content: space-between; gap: 8px;
+    }
+    .col:hover { background: rgba(255,255,255,.04); }
+    .name { color: var(--text); }
+    .type { color: var(--muted); font-size: 0.75rem; }
+    .pk { color: var(--pk); }
+    .fk { color: var(--fk); }
+    .rels {
+      margin-top: 32px;
+      max-width: 900px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+    .rels h3 { margin: 0 0 12px; font-size: 1rem; }
+    .rels ul { margin: 0; padding-left: 20px; color: var(--muted); font-size: 0.88rem; }
+    .rels li { margin: 6px 0; }
+    .rels code { color: var(--accent); font-size: 0.85em; }
+    .seed {
+      margin-top: 16px;
+      padding: 12px 16px;
+      background: rgba(0,184,207,.08);
+      border: 1px solid rgba(0,184,207,.3);
+      border-radius: 8px;
+      font-size: 0.88rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>청소해라 · Neon PostgreSQL ERD</h1>
+  <p class="sub">사용자(부모 계정)별 데이터 격리 · <code>parent_account_id</code> FK 중심</p>
+
+  <div class="legend">
+    <span><i class="dot pk"></i> PK / 복합 PK</span>
+    <span><i class="dot fk"></i> FK → parent_accounts</span>
+    <span>로그인: <code>/parent/login</code> → <strong>3jo</strong> / <strong>1234</strong></span>
+  </div>
+
+  <div class="seed">
+    <strong>시드 계정</strong> — <code>parent_accounts</code> 테이블 · <code>login_id='3jo'</code>, 비밀번호 SHA-256 해시 ·
+    부모 1명 = 가족 1단위 · 자녀·로그·포인트·상점·제안 모두 <code>parent_account_id</code>로 분리
+  </div>
+
+  <div class="grid" style="margin-top: 20px;">
+    <div class="entity core">
+      <h2>parent_accounts</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">id</span><span class="type">SERIAL PK</span></div>
+        <div class="col"><span class="name pk">login_id</span><span class="type">UNIQUE</span></div>
+        <div class="col"><span class="name">password_hash</span><span class="type">VARCHAR</span></div>
+        <div class="col"><span class="name">display_name</span><span class="type">VARCHAR</span></div>
+        <div class="col"><span class="name">onboard_done</span><span class="type">BOOLEAN</span></div>
+        <div class="col"><span class="name">child_display_name</span><span class="type">VARCHAR</span></div>
+        <div class="col"><span class="name">points_balance</span><span class="type">INT</span></div>
+        <div class="col"><span class="name">base_clean_won</span><span class="type">INT</span></div>
+        <div class="col"><span class="name">lock_time / lock_days</span><span class="type">VARCHAR</span></div>
+        <div class="col"><span class="name">pass_score</span><span class="type">INT</span></div>
+        <div class="col"><span class="name">allow_phone / allowlist</span><span class="type">BOOL / JSONB</span></div>
+        <div class="col"><span class="name">baseline_url</span><span class="type">TEXT</span></div>
+        <div class="col"><span class="name">notification_prefs</span><span class="type">JSONB</span></div>
+        <div class="col"><span class="name">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <div class="entity">
+      <h2>child_devices</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">id</span><span class="type">TEXT PK</span></div>
+        <div class="col"><span class="name fk">parent_account_id</span><span class="type">INT FK</span></div>
+        <div class="col"><span class="name">display_name</span><span class="type">VARCHAR</span></div>
+        <div class="col"><span class="name">paired_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <div class="entity">
+      <h2>pair_codes</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">code</span><span class="type">VARCHAR PK</span></div>
+        <div class="col"><span class="name fk">parent_account_id</span><span class="type">INT FK</span></div>
+        <div class="col"><span class="name">expires_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="col"><span class="name">used</span><span class="type">BOOLEAN</span></div>
+      </div>
+    </div>
+
+    <div class="entity">
+      <h2>cleaning_logs</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">parent_account_id</span><span class="type">INT PK,FK</span></div>
+        <div class="col"><span class="name pk">log_date</span><span class="type">DATE PK</span></div>
+        <div class="col"><span class="name">score / streak_days</span><span class="type">INT</span></div>
+        <div class="col"><span class="name">before_url / after_url</span><span class="type">TEXT</span></div>
+      </div>
+    </div>
+
+    <div class="entity">
+      <h2>log_messages</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">id</span><span class="type">TEXT PK</span></div>
+        <div class="col"><span class="name fk">parent_account_id, log_date</span><span class="type">FK composite</span></div>
+        <div class="col"><span class="name">role / text / badge</span><span class="type">VARCHAR/TEXT</span></div>
+        <div class="col"><span class="name">at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <div class="entity">
+      <h2>praise_presets</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">id</span><span class="type">SERIAL PK</span></div>
+        <div class="col"><span class="name fk">parent_account_id</span><span class="type">INT FK</span></div>
+        <div class="col"><span class="name">phrase</span><span class="type">UNIQUE(parent,phrase)</span></div>
+      </div>
+    </div>
+
+    <div class="entity">
+      <h2>shop_rewards</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">id</span><span class="type">SERIAL PK</span></div>
+        <div class="col"><span class="name fk">parent_account_id</span><span class="type">INT FK</span></div>
+        <div class="col"><span class="name">label / won</span><span class="type">VARCHAR/INT</span></div>
+        <div class="col"><span class="name">sort_order</span><span class="type">INT</span></div>
+      </div>
+    </div>
+
+    <div class="entity">
+      <h2>daily_quests</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">id</span><span class="type">SERIAL PK</span></div>
+        <div class="col"><span class="name fk">parent_account_id</span><span class="type">INT FK</span></div>
+        <div class="col"><span class="name">title / description</span><span class="type">TEXT</span></div>
+        <div class="col"><span class="name">active</span><span class="type">BOOLEAN</span></div>
+      </div>
+    </div>
+
+    <div class="entity">
+      <h2>points_ledger</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">id</span><span class="type">SERIAL PK</span></div>
+        <div class="col"><span class="name fk">parent_account_id</span><span class="type">INT FK</span></div>
+        <div class="col"><span class="name">amount / kind / label</span><span class="type">INT/VARCHAR</span></div>
+        <div class="col"><span class="name">at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <div class="entity">
+      <h2>propose_threads</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">id</span><span class="type">TEXT PK</span></div>
+        <div class="col"><span class="name fk">parent_account_id</span><span class="type">INT FK</span></div>
+        <div class="col"><span class="name">label / points / status</span><span class="type">VARCHAR/INT</span></div>
+        <div class="col"><span class="name">updated_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <div class="entity">
+      <h2>propose_messages</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">id</span><span class="type">TEXT PK</span></div>
+        <div class="col"><span class="name fk">thread_id</span><span class="type">→ propose_threads</span></div>
+        <div class="col"><span class="name">role / kind / label</span><span class="type">VARCHAR</span></div>
+        <div class="col"><span class="name">points / reason</span><span class="type">INT/TEXT</span></div>
+      </div>
+    </div>
+
+    <div class="entity cleaning">
+      <h2>cleaning_memories</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">id</span><span class="type">UUID PK</span></div>
+        <div class="col"><span class="name">user_id</span><span class="type">TEXT (guest)</span></div>
+        <div class="col"><span class="name">room_id / room_name</span><span class="type">VARCHAR</span></div>
+        <div class="col"><span class="name">cleanliness / exp / gold</span><span class="type">INT</span></div>
+      </div>
+    </div>
+
+    <div class="entity">
+      <h2>lock_policy</h2>
+      <div class="cols">
+        <div class="col"><span class="name pk">id</span><span class="type">INT PK (=1, 레거시)</span></div>
+        <div class="col"><span class="name">lock_time / lock_days</span><span class="type">VARCHAR</span></div>
+        <div class="col"><span class="col-note" style="color:var(--muted)">실제 정책은 parent_accounts 컬럼 사용</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rels">
+    <h3>관계 요약</h3>
+    <ul>
+      <li><code>parent_accounts</code> 1 ── N <code>child_devices</code>, <code>pair_codes</code>, <code>shop_rewards</code>, <code>daily_quests</code>, <code>points_ledger</code>, <code>propose_threads</code>, <code>praise_presets</code></li>
+      <li><code>parent_accounts</code> 1 ── N <code>cleaning_logs</code> (복합 PK: parent + date) ── N <code>log_messages</code></li>
+      <li><code>propose_threads</code> 1 ── N <code>propose_messages</code></li>
+      <li><code>cleaning_memories</code> — cleaning 미니게임 게스트 전용 (JWT 없음)</li>
+    </ul>
+  </div>
+</body>
+</html>

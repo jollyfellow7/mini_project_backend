@@ -49,6 +49,10 @@ jobs:
             echo "::error::GEMINI_API_KEY 시크릿이 필요합니다."
             exit 1
           fi
+          if [ -z "${{ secrets.JWT_SECRET }}" ]; then
+            echo "::error::JWT_SECRET 시크릿이 필요합니다 (chungsora JWT)."
+            exit 1
+          fi
           if [ -z "${{ secrets.EC2_HOST }}" ] || [ -z "${{ secrets.EC2_USERNAME }}" ] || [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
             echo "::error::EC2_HOST, EC2_USERNAME, EC2_SSH_KEY 가 필요합니다."
             exit 1
@@ -66,10 +70,7 @@ jobs:
             docker stop mini-cleaning-api || true
             docker rm mini-cleaning-api || true
             docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
-            EXTRA_ENV=""
-            if [ -n '${{ secrets.JWT_SECRET }}' ]; then
-              EXTRA_ENV="$EXTRA_ENV -e JWT_SECRET=${{ secrets.JWT_SECRET }}"
-            fi
+            EXTRA_ENV="-e JWT_SECRET=${{ secrets.JWT_SECRET }}"
             if [ -n '${{ secrets.CORS_ORIGINS }}' ]; then
               EXTRA_ENV="$EXTRA_ENV -e CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}"
             fi
@@ -85,3 +86,4 @@ jobs:
               ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
             sleep 15
             curl -fsS http://127.0.0.1:8080/health
+            curl -fsS http://127.0.0.1:8080/health/ready
