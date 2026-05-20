@@ -150,6 +150,10 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
         """)
         await conn.execute("""
             ALTER TABLE parent_accounts
+            ADD COLUMN IF NOT EXISTS baseline_verified BOOLEAN NOT NULL DEFAULT FALSE
+        """)
+        await conn.execute("""
+            ALTER TABLE parent_accounts
             ADD COLUMN IF NOT EXISTS notification_prefs JSONB NOT NULL DEFAULT '{"cleaning_done":true,"proposal":true,"streak":true}'::jsonb
         """)
         await conn.execute("""
@@ -316,7 +320,8 @@ class ChungsoraRepository:
                 """
                 SELECT id, login_id, display_name, onboard_done, child_display_name,
                        points_balance, base_clean_won, lock_time, lock_days, pass_score,
-                       allow_phone, allowlist, baseline_url, baseline_urls, notification_prefs
+                       allow_phone, allowlist, baseline_url, baseline_urls, baseline_verified,
+                       notification_prefs
                 FROM parent_accounts WHERE id = $1
                 """,
                 parent_id,
@@ -349,6 +354,7 @@ class ChungsoraRepository:
             "allowlist": allowlist,
             "baseline_url": row["baseline_url"],
             "baseline_urls": baseline_urls or [],
+            "baseline_verified": bool(row["baseline_verified"]),
             "notification_prefs": prefs,
         }
 
@@ -364,6 +370,7 @@ class ChungsoraRepository:
             "allowlist",
             "baseline_url",
             "baseline_urls",
+            "baseline_verified",
             "notification_prefs",
         }
         fields = {k: v for k, v in body.items() if k in allowed and v is not None}
@@ -411,6 +418,7 @@ class ChungsoraRepository:
             "today_score": log.get("score") or 0,
             "baseline_url": profile.get("baseline_url"),
             "baseline_urls": profile.get("baseline_urls") or [],
+            "baseline_verified": bool(profile.get("baseline_verified")),
         }
 
     async def set_baseline_slot(self, parent_id: int, slot: int, url: str) -> list[str]:
@@ -426,6 +434,7 @@ class ChungsoraRepository:
             {
                 "baseline_urls": urls,
                 "baseline_url": urls[0] if urls else url,
+                "baseline_verified": False,
             },
         )
         return [u for u in urls if u]
