@@ -82,6 +82,7 @@ async def upload_photo(
     date: str,
     ctx: FamilyContext = Depends(get_family_context),
     phase: str = Query(..., pattern="^(before|after|baseline)$"),
+    slot: int | None = Query(default=None, ge=0, le=2),
     file: UploadFile = File(...),
 ):
     if not _DATE_RE.match(date):
@@ -93,16 +94,17 @@ async def upload_photo(
 
     dest_dir = _UPLOAD_ROOT / str(ctx.parent_id) / date
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / f"{phase}{suffix}"
+    stem = f"{phase}_{slot}" if slot is not None else phase
+    dest = dest_dir / f"{stem}{suffix}"
 
     content = await file.read()
     dest.write_bytes(content)
 
-    url = f"/uploads/logs/{ctx.parent_id}/{date}/{phase}{suffix}"
+    url = f"/uploads/logs/{ctx.parent_id}/{date}/{stem}{suffix}"
     repo = await get_chungsora_repo()
     if phase == "baseline":
-        await repo.update_parent_profile(ctx.parent_id, {"baseline_url": url})
-    else:
+        await repo.set_baseline_slot(ctx.parent_id, slot or 0, url)
+    elif slot is None or slot >= 2:
         await repo.set_log_photo(ctx.parent_id, date, phase, url)
 
-    return {"date": date, "phase": phase, "url": url}
+    return {"date": date, "phase": phase, "slot": slot, "url": url}

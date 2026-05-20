@@ -33,6 +33,14 @@ class VerifyResponse(BaseModel):
     model_label: str = ""
 
 
+class BaselineEvalResponse(BaseModel):
+    quality_score: int
+    acceptable: bool
+    comment: str
+    model_id: str = ""
+    model_label: str = ""
+
+
 class AiInfoResponse(BaseModel):
     vision_model: str
     vision_label: str

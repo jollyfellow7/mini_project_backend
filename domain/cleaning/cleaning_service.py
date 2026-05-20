@@ -8,6 +8,7 @@ from typing import Any, List
 from domain.cleaning import cleaning_gemini_adapter as gemini
 from domain.cleaning.cleaning_dto import (
     AiInfoResponse,
+    BaselineEvalResponse,
     ChatResponse,
     DetectedMonster,
     ScanResponse,
@@ -126,6 +127,59 @@ class CleaningService:
                 model_label=format_model_label("fallback"),
             )
 
+    async def evaluate_baseline(self, image_bytes: bytes, slot_label: str) -> BaselineEvalResponse:
+        prompt = (
+            f"이미지는 아이 방 '{slot_label}' 구역의 깨끗한 baseline 기준 촬영입니다. "
+            "AI가 이후 자녀 청소 결과와 비교할 학습 기준으로 쓸 수 있는지 평가하세요. "
+            "방이 선명하게 보이고, 너무 어둡거나 흔들리거나 가려지지 않았는지 확인하세요. "
+            'JSON만: {"quality_score": 85, "acceptable": true, "comment": "한국어 한 줄"} '
+            "acceptable은 quality_score>=70일 때 true."
+        )
+        try:
+            raw, model_id = await gemini.generate_vision(
+                image_bytes, "image/jpeg", prompt
+            )
+            data = gemini.parse_json_response(raw)
+            quality = max(0, min(100, int(data.get("quality_score", 0))))
+            acceptable = bool(data.get("acceptable", quality >= 70))
+            comment = str(data.get("comment", ""))[:300]
+            return BaselineEvalResponse(
+                quality_score=quality,
+                acceptable=acceptable and quality >= 70,
+                comment=comment or f"{slot_label} baseline 품질 {quality}점",
+                model_id=model_id,
+                model_label=format_model_label(model_id),
+            )
+        except Exception as e:
+            logger.warning("[baseline-eval] Gemini failed: %s", e)
+            raise RuntimeError("baseline_eval_failed") from e
+
+    async def compare_with_baseline(
+        self, baseline_bytes: bytes, after_bytes: bytes, slot_label: str
+    ) -> VerifyResponse:
+        prompt = (
+            f"첫 번째 이미지: 부모가 등록한 '{slot_label}' 깨끗한 baseline 기준입니다.\n"
+            f"두 번째 이미지: 자녀가 청소 후 촬영한 같은 '{slot_label}' 구역입니다.\n"
+            "baseline과 비교해 얼마나 비슷하게 깨끗한지 0~100 cleanliness, 한국어 comment 한 문장.\n"
+            'JSON만: {"cleanliness": 88, "comment": "..."}'
+        )
+        try:
+            raw, model_id = await gemini.generate_vision_pair(
+                baseline_bytes, after_bytes, prompt
+            )
+            data = gemini.parse_json_response(raw)
+            cleanliness = max(0, min(100, int(data.get("cleanliness", 0))))
+            comment = str(data.get("comment", "비교 채점 완료."))[:300]
+            return VerifyResponse(
+                cleanliness=cleanliness,
+                comment=comment,
+                model_id=model_id,
+                model_label=format_model_label(model_id),
+            )
+        except Exception as e:
+            logger.warning("[compare-baseline] Gemini failed: %s", e)
+            raise RuntimeError("compare_baseline_failed") from e
+
     async def coach_chat(self, body: dict[str, Any]) -> ChatResponse:
         history = body.get("history") or []
         hist_lines = "\n".join(
@@ -167,6 +221,16 @@ async def scan_room(image_bytes: bytes, room_name: str) -> ScanResponse:
 
 async def verify_cleanliness(image_bytes: bytes, room_name: str) -> VerifyResponse:
     return await _service.verify_cleanliness(image_bytes, room_name)
+
+
+async def evaluate_baseline(image_bytes: bytes, slot_label: str) -> BaselineEvalResponse:
+    return await _service.evaluate_baseline(image_bytes, slot_label)
+
+
+async def compare_with_baseline(
+    baseline_bytes: bytes, after_bytes: bytes, slot_label: str
+) -> VerifyResponse:
+    return await _service.compare_with_baseline(baseline_bytes, after_bytes, slot_label)
 
 
 async def coach_chat(body: dict[str, Any]) -> ChatResponse:

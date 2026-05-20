@@ -8,6 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from core.database import get_pool
 from domain.cleaning.cleaning_dto import (
     AiInfoResponse,
+    BaselineEvalResponse,
     ChatRequest,
     ChatResponse,
     MemoryRequest,
@@ -55,6 +56,36 @@ async def verify_room(
     except Exception as e:
         logger.error("[cleaning] /verify error: %s", e)
         raise HTTPException(status_code=500, detail="채점 중 오류가 발생했습니다.")
+
+
+@router.post("/baseline-eval", response_model=BaselineEvalResponse)
+async def baseline_eval(
+    file: UploadFile = File(...),
+    slot_label: str = Form(...),
+) -> BaselineEvalResponse:
+    image_bytes = await file.read()
+    try:
+        return await cleaning_service.evaluate_baseline(image_bytes, slot_label)
+    except Exception as e:
+        logger.error("[cleaning] /baseline-eval error: %s", e)
+        raise HTTPException(status_code=502, detail="baseline AI 평가에 실패했습니다.")
+
+
+@router.post("/compare-baseline", response_model=VerifyResponse)
+async def compare_baseline(
+    baseline_file: UploadFile = File(...),
+    after_file: UploadFile = File(...),
+    slot_label: str = Form(...),
+) -> VerifyResponse:
+    baseline_bytes = await baseline_file.read()
+    after_bytes = await after_file.read()
+    try:
+        return await cleaning_service.compare_with_baseline(
+            baseline_bytes, after_bytes, slot_label
+        )
+    except Exception as e:
+        logger.error("[cleaning] /compare-baseline error: %s", e)
+        raise HTTPException(status_code=502, detail="baseline 비교 채점에 실패했습니다.")
 
 
 @router.post("/chat", response_model=ChatResponse)

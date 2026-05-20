@@ -146,6 +146,10 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
         """)
         await conn.execute("""
             ALTER TABLE parent_accounts
+            ADD COLUMN IF NOT EXISTS baseline_urls JSONB NOT NULL DEFAULT '[]'::jsonb
+        """)
+        await conn.execute("""
+            ALTER TABLE parent_accounts
             ADD COLUMN IF NOT EXISTS notification_prefs JSONB NOT NULL DEFAULT '{"cleaning_done":true,"proposal":true,"streak":true}'::jsonb
         """)
         await conn.execute("""
@@ -312,7 +316,7 @@ class ChungsoraRepository:
                 """
                 SELECT id, login_id, display_name, onboard_done, child_display_name,
                        points_balance, base_clean_won, lock_time, lock_days, pass_score,
-                       allow_phone, allowlist, baseline_url, notification_prefs
+                       allow_phone, allowlist, baseline_url, baseline_urls, notification_prefs
                 FROM parent_accounts WHERE id = $1
                 """,
                 parent_id,
@@ -325,6 +329,11 @@ class ChungsoraRepository:
         prefs = row["notification_prefs"]
         if isinstance(prefs, str):
             prefs = json.loads(prefs)
+        baseline_urls = row["baseline_urls"]
+        if isinstance(baseline_urls, str):
+            baseline_urls = json.loads(baseline_urls)
+        if not baseline_urls and row["baseline_url"]:
+            baseline_urls = [row["baseline_url"]]
         return {
             "id": row["id"],
             "login_id": row["login_id"],
@@ -339,6 +348,7 @@ class ChungsoraRepository:
             "allow_phone": row["allow_phone"],
             "allowlist": allowlist,
             "baseline_url": row["baseline_url"],
+            "baseline_urls": baseline_urls or [],
             "notification_prefs": prefs,
         }
 
@@ -353,6 +363,7 @@ class ChungsoraRepository:
             "allow_phone",
             "allowlist",
             "baseline_url",
+            "baseline_urls",
             "notification_prefs",
         }
         fields = {k: v for k, v in body.items() if k in allowed and v is not None}
@@ -363,7 +374,7 @@ class ChungsoraRepository:
         values: list[Any] = []
         idx = 1
         for key, val in fields.items():
-            if key in ("allowlist", "notification_prefs"):
+            if key in ("allowlist", "notification_prefs", "baseline_urls"):
                 sets.append(f"{key} = ${idx}::jsonb")
                 values.append(json.dumps(val))
             else:
@@ -398,7 +409,26 @@ class ChungsoraRepository:
             "pass_score": profile["pass_score"],
             "onboard_done": profile["onboard_done"],
             "today_score": log.get("score") or 0,
+            "baseline_url": profile.get("baseline_url"),
+            "baseline_urls": profile.get("baseline_urls") or [],
         }
+
+    async def set_baseline_slot(self, parent_id: int, slot: int, url: str) -> list[str]:
+        profile = await self.get_parent_by_id(parent_id)
+        if not profile:
+            return []
+        urls: list[str | None] = list(profile.get("baseline_urls") or [])
+        while len(urls) <= slot:
+            urls.append(None)
+        urls[slot] = url
+        await self.update_parent_profile(
+            parent_id,
+            {
+                "baseline_urls": urls,
+                "baseline_url": urls[0] if urls else url,
+            },
+        )
+        return [u for u in urls if u]
 
     async def ensure_log(self, parent_id: int, date_str: str) -> None:
         d = datetime.strptime(date_str, "%Y-%m-%d").date()

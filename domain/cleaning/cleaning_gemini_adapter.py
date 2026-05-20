@@ -126,5 +126,51 @@ async def generate_vision(
     )
 
 
+def _sync_generate_vision_pair(
+    baseline_bytes: bytes,
+    after_bytes: bytes,
+    prompt: str,
+    model: str | None = None,
+) -> tuple[str, str]:
+    model = model or _pick_model("vision")
+    b64_a = base64.b64encode(baseline_bytes).decode("ascii")
+    b64_b = base64.b64encode(after_bytes).decode("ascii")
+    client = _client()
+    last: BaseException | None = None
+    for mid in [model] + [m for m in VISION_MODEL_ORDER if m != model]:
+        try:
+            response = client.models.generate_content(
+                model=mid,
+                contents=[
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": prompt},
+                            {"inline_data": {"mime_type": "image/jpeg", "data": b64_a}},
+                            {"inline_data": {"mime_type": "image/jpeg", "data": b64_b}},
+                        ],
+                    }
+                ],
+            )
+            text = (response.text or "").strip()
+            if text:
+                return text, mid
+        except Exception as exc:
+            logger.warning("[gemini vision pair] model=%s failed: %s", mid, exc)
+            last = exc
+    raise RuntimeError("Gemini vision pair call failed") from last
+
+
+async def generate_vision_pair(
+    baseline_bytes: bytes,
+    after_bytes: bytes,
+    prompt: str,
+    model: str | None = None,
+) -> tuple[str, str]:
+    return await asyncio.to_thread(
+        _sync_generate_vision_pair, baseline_bytes, after_bytes, prompt, model
+    )
+
+
 def parse_json_response(text: str) -> dict[str, Any]:
     return _parse_json(text)
