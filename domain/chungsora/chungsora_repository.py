@@ -13,6 +13,37 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
+BASELINE_SLOT_COUNT = 3
+
+
+def _normalize_upload_path(url: str | None) -> str | None:
+    """DB에 저장된 EC2 절대 URL → /uploads/... 상대 경로 (프론트 BFF 프록시용)."""
+    if not url:
+        return None
+    u = url.strip()
+    if not u:
+        return None
+    if u.startswith(("http://", "https://")):
+        from urllib.parse import urlparse
+
+        path = urlparse(u).path
+        if path.startswith("/uploads/"):
+            return path
+    return u
+
+
+def _pad_baseline_urls(urls: list[Any] | None) -> list[str | None]:
+    padded: list[str | None] = [None, None, None]
+    if not urls:
+        return padded
+    for i, item in enumerate(urls):
+        if i >= BASELINE_SLOT_COUNT:
+            break
+        if item is None or item == "":
+            continue
+        padded[i] = _normalize_upload_path(str(item))
+    return padded
+
 
 def _password_hash(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
@@ -416,8 +447,8 @@ class ChungsoraRepository:
             "pass_score": profile["pass_score"],
             "onboard_done": profile["onboard_done"],
             "today_score": log.get("score") or 0,
-            "baseline_url": profile.get("baseline_url"),
-            "baseline_urls": profile.get("baseline_urls") or [],
+            "baseline_url": _normalize_upload_path(profile.get("baseline_url")),
+            "baseline_urls": _pad_baseline_urls(profile.get("baseline_urls") or []),
             "baseline_verified": bool(profile.get("baseline_verified")),
         }
 
