@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from typing import List
+from urllib.parse import quote_plus
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -19,6 +20,7 @@ class Settings(BaseSettings):
     JWT_SECRET: str = ""
 
     CORS_ORIGINS: List[str] = [
+        "http://localhost:34567",
         "http://localhost:3111",
         "http://localhost:3000",
     ]
@@ -35,7 +37,9 @@ class Settings(BaseSettings):
         url = self.NEON_DB_URL.replace("jdbc:", "")
         if "://" in url and self.NEON_DB_USERNAME:
             proto, rest = url.split("://", 1)
-            return f"{proto}://{self.NEON_DB_USERNAME}:{self.NEON_DB_PASSWORD}@{rest}"
+            pw = quote_plus(self.NEON_DB_PASSWORD or "")
+            user = quote_plus(self.NEON_DB_USERNAME)
+            return f"{proto}://{user}:{pw}@{rest}"
         return url
 
 

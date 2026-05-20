@@ -1,0 +1,13 @@
+.env
+.env.*
+.git
+.github
+__pycache__
+*.py[cod]
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+uploads/
+*.md
+TEAM_SETUP.md
