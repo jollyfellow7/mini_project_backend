@@ -1,11 +1,11 @@
-# mini_project_backend — conda env: mini-backend
+# mini_backend — conda env: mini-backend (Python 3.11, EC2 Docker 동일)
+# 스모크·보정: tools/smoke_neon_e2e, backfill_onboard_done, verify_production_deploy (stdlib + 위 패키지)
+
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
 pydantic-settings==2.7.1
 asyncpg==0.30.0
 python-multipart==0.0.20
-httpx==0.28.1
 google-genai>=1.56.0,<2.0.0
-Pillow==11.0.0
 PyJWT==2.10.1

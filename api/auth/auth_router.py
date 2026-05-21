@@ -20,7 +20,7 @@ class SignupBody(BaseModel):
     display_name: str = Field(default="", max_length=120)
 
 
-def _auth_payload(user: dict) -> dict:
+def _auth_payload(user: dict, profile: dict | None = None) -> dict:
     token = create_access_token({"sub": str(user["id"]), "login_id": user["login_id"]})
     return {
         "ok": True,
@@ -28,13 +28,17 @@ def _auth_payload(user: dict) -> dict:
         "id": user["id"],
         "login_id": user["login_id"],
         "display_name": user["display_name"],
+        "onboard_done": profile["onboard_done"] if profile else False,
+        "child_display_name": profile["child_display_name"] if profile else "자녀",
     }
 
 
 @router.get("/me")
 async def parent_me(parent_id: int = Depends(get_current_parent_id)):
     repo = await get_chungsora_repo()
-    profile = await repo.get_parent_by_id(parent_id)
+    profile = await repo.sync_onboard_done_if_paired(parent_id)
+    if not profile:
+        profile = await repo.get_parent_by_id(parent_id)
     if not profile:
         raise HTTPException(status_code=404, detail="not_found")
     return {
@@ -49,6 +53,8 @@ async def parent_me(parent_id: int = Depends(get_current_parent_id)):
         "lock_days": profile["lock_days"],
         "pass_score": profile["pass_score"],
         "notification_prefs": profile["notification_prefs"],
+        "coach_character_id": profile.get("coach_character_id") or "jiu",
+        "child_coach_character_id": profile.get("child_coach_character_id"),
         "token": create_access_token(
             {"sub": str(profile["id"]), "login_id": profile["login_id"]}
         ),
@@ -61,7 +67,10 @@ async def parent_login(body: LoginBody):
     user = await repo.verify_parent_login(body.login_id, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="invalid_credentials")
-    return _auth_payload(user)
+    profile = await repo.sync_onboard_done_if_paired(user["id"])
+    if not profile:
+        profile = await repo.get_parent_by_id(user["id"])
+    return _auth_payload(user, profile)
 
 
 @router.post("/signup")
@@ -75,4 +84,5 @@ async def parent_signup(body: SignupBody):
         if str(exc) == "duplicate_login_id":
             raise HTTPException(status_code=409, detail="duplicate_login_id") from exc
         raise
-    return _auth_payload(user)
+    profile = await repo.get_parent_by_id(user["id"])
+    return _auth_payload(user, profile)

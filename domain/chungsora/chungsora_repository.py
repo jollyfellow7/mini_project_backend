@@ -14,6 +14,33 @@ import asyncpg
 logger = logging.getLogger(__name__)
 
 BASELINE_SLOT_COUNT = 3
+COACH_CHARACTER_IDS = frozenset({"jiu", "seoyeon", "hajun"})
+
+
+def _normalize_coach_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip().lower()
+    if s in COACH_CHARACTER_IDS:
+        return s
+    return "jiu"
+
+
+def _streak_mult(streak_days: int) -> float:
+    if streak_days >= 14:
+        return 2.0
+    if streak_days >= 7:
+        return 1.5
+    if streak_days >= 3:
+        return 1.25
+    return 1.0
+
+
+def _effective_coach_id(profile: dict) -> str:
+    child = _normalize_coach_id(profile.get("child_coach_character_id"))
+    if child:
+        return child
+    return _normalize_coach_id(profile.get("coach_character_id")) or "jiu"
 
 
 def _normalize_upload_path(url: str | None) -> str | None:
@@ -188,6 +215,14 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
             ADD COLUMN IF NOT EXISTS notification_prefs JSONB NOT NULL DEFAULT '{"cleaning_done":true,"proposal":true,"streak":true}'::jsonb
         """)
         await conn.execute("""
+            ALTER TABLE parent_accounts
+            ADD COLUMN IF NOT EXISTS coach_character_id VARCHAR(20) NOT NULL DEFAULT 'jiu'
+        """)
+        await conn.execute("""
+            ALTER TABLE parent_accounts
+            ADD COLUMN IF NOT EXISTS child_coach_character_id VARCHAR(20)
+        """)
+        await conn.execute("""
             ALTER TABLE shop_rewards
             ADD COLUMN IF NOT EXISTS parent_account_id INT REFERENCES parent_accounts(id)
         """)
@@ -352,7 +387,7 @@ class ChungsoraRepository:
                 SELECT id, login_id, display_name, onboard_done, child_display_name,
                        points_balance, base_clean_won, lock_time, lock_days, pass_score,
                        allow_phone, allowlist, baseline_url, baseline_urls, baseline_verified,
-                       notification_prefs
+                       notification_prefs, coach_character_id, child_coach_character_id
                 FROM parent_accounts WHERE id = $1
                 """,
                 parent_id,
@@ -387,6 +422,8 @@ class ChungsoraRepository:
             "baseline_urls": baseline_urls or [],
             "baseline_verified": bool(row["baseline_verified"]),
             "notification_prefs": prefs,
+            "coach_character_id": _normalize_coach_id(row["coach_character_id"]),
+            "child_coach_character_id": _normalize_coach_id(row["child_coach_character_id"]),
         }
 
     async def update_parent_profile(self, parent_id: int, body: dict) -> dict:
@@ -403,8 +440,16 @@ class ChungsoraRepository:
             "baseline_urls",
             "baseline_verified",
             "notification_prefs",
+            "coach_character_id",
+            "child_coach_character_id",
         }
         fields = {k: v for k, v in body.items() if k in allowed and v is not None}
+        if "coach_character_id" in fields:
+            fields["coach_character_id"] = _normalize_coach_id(fields["coach_character_id"])
+        if "child_coach_character_id" in fields:
+            fields["child_coach_character_id"] = _normalize_coach_id(
+                fields["child_coach_character_id"]
+            )
         if not fields:
             profile = await self.get_parent_by_id(parent_id)
             return profile or {}
@@ -435,13 +480,16 @@ class ChungsoraRepository:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         log = await self.get_log(parent_id, today)
         streak = log.get("streak_days") or 0
-        mult = 1.5 if streak >= 5 else 1.0
+        mult = _streak_mult(streak)
         return {
             "child_display_name": profile["child_display_name"],
             "points_balance": profile["points_balance"],
             "base_clean_won": profile["base_clean_won"],
             "streak_days": streak,
             "streak_mult": mult,
+            "coach_character_id": profile.get("coach_character_id") or "jiu",
+            "child_coach_character_id": profile.get("child_coach_character_id"),
+            "effective_coach_character_id": _effective_coach_id(profile),
             "lock_time": profile["lock_time"],
             "lock_days": profile["lock_days"],
             "pass_score": profile["pass_score"],
@@ -663,6 +711,44 @@ class ChungsoraRepository:
         chars = chars.replace("O", "").replace("0", "").replace("I", "").replace("1", "")
         return "".join(random.choice(chars) for _ in range(6))
 
+    async def has_child_device(self, parent_id: int) -> bool:
+        async with self._pool.acquire() as conn:
+            n = await conn.fetchval(
+                "SELECT COUNT(*)::int FROM child_devices WHERE parent_account_id = $1",
+                parent_id,
+            )
+        return bool(n and n > 0)
+
+    async def sync_onboard_done_if_paired(self, parent_id: int) -> dict | None:
+        """자녀 기기가 있으나 onboard_done=false 인 기존 계정 보정 (B-1)."""
+        profile = await self.get_parent_by_id(parent_id)
+        if not profile or profile.get("onboard_done"):
+            return profile
+        if not await self.has_child_device(parent_id):
+            return profile
+        return await self.update_parent_profile(parent_id, {"onboard_done": True})
+
+    async def get_pair_code_status(self, parent_id: int, code: str) -> dict:
+        code = code.strip().upper()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT used FROM pair_codes
+                WHERE code = $1 AND parent_account_id = $2
+                """,
+                code,
+                parent_id,
+            )
+            device_count = await conn.fetchval(
+                "SELECT COUNT(*)::int FROM child_devices WHERE parent_account_id = $1",
+                parent_id,
+            )
+        return {
+            "code": code,
+            "code_used": bool(row and row["used"]),
+            "child_paired": bool(device_count and device_count > 0),
+        }
+
     async def issue_pair_code(self, parent_account_id: int, ttl_minutes: int = 10) -> dict:
         code = self._gen_code()
         expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
@@ -717,12 +803,38 @@ class ChungsoraRepository:
             )
         from core.jwt_utils import create_child_token
 
-        token = create_child_token(device_id, int(row["parent_account_id"]))
+        parent_id = int(row["parent_account_id"])
+        await self.sync_onboard_done_if_paired(parent_id)
+        token = create_child_token(device_id, parent_id)
         return {
             "ok": True,
             "code": code,
-            "parent_account_id": row["parent_account_id"],
+            "parent_account_id": parent_id,
             "device_id": device_id,
+            "device_token": token,
+        }
+
+    async def refresh_child_device_token(self, device_id: str) -> dict:
+        """등록된 기기는 JWT 만료만 갱신 — 연결(DB)은 유지."""
+        device_id = device_id.strip()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT parent_account_id FROM child_devices WHERE id = $1
+                """,
+                device_id,
+            )
+        if not row:
+            return {"ok": False, "reason": "not_registered"}
+        parent_id = int(row["parent_account_id"])
+        await self.sync_onboard_done_if_paired(parent_id)
+        from core.jwt_utils import create_child_token
+
+        token = create_child_token(device_id, parent_id)
+        return {
+            "ok": True,
+            "device_id": device_id,
+            "parent_account_id": parent_id,
             "device_token": token,
         }
 

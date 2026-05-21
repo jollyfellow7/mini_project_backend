@@ -177,7 +177,18 @@ curl http://127.0.0.1:8080/health/ready
 
 - cleaning: 프론트 스캔 후 `POST /api/v1/cleaning/scan` · `model_id: gemini-...`
 
-- chungsora: `POST /api/v1/auth/login` `{ "login_id": "<Neon에 등록된 id>", "password": "<...>" }` → JWT
+- chungsora: `POST /api/v1/auth/login` `{ "login_id": "<Neon에 등록된 id>", "password": "<...>" }` → JWT (`onboard_done` 포함)
+
+### 배포·검증 스크립트 (로컬 conda)
+
+```powershell
+python -m tools.smoke_neon_e2e --http http://43.201.95.108:8080
+python -m tools.smoke_neon_e2e --keep --login-id smoke_dev
+python -m tools.backfill_onboard_done
+python -m tools.verify_production_deploy
+```
+
+리포트: 모노레포 루트 `SMOKE_VERIFICATION_REPORT.md`
 
 
 

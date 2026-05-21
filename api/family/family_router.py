@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 from fastapi import APIRouter, Depends
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+CoachCharacterId = Literal["jiu", "seoyeon", "hajun"]
 
 from api.deps.auth_deps import FamilyContext, get_current_parent_id, get_family_context
 from domain.chungsora.chungsora_repository import get_chungsora_repo
@@ -19,6 +23,8 @@ class ProfileBody(BaseModel):
     allowlist: list[str] | None = None
     baseline_url: str | None = None
     notification_prefs: dict | None = None
+    coach_character_id: CoachCharacterId | None = None
+    child_coach_character_id: CoachCharacterId | None = None
 
 
 @router.get("/summary")
@@ -27,11 +33,24 @@ async def family_summary(ctx: FamilyContext = Depends(get_family_context)):
     return await repo.get_family_summary(ctx.parent_id)
 
 
+@router.patch("/summary")
+async def update_summary(
+    body: ProfileBody,
+    parent_id: int = Depends(get_current_parent_id),
+):
+    """프론트 updateFamilyProfile()이 호출하는 엔드포인트 (PATCH /family/summary)."""
+    repo = await get_chungsora_repo()
+    return await repo.update_parent_profile(
+        parent_id, body.model_dump(exclude_none=True)
+    )
+
+
 @router.patch("/profile")
 async def update_profile(
     body: ProfileBody,
     parent_id: int = Depends(get_current_parent_id),
 ):
+    """하위 호환 유지."""
     repo = await get_chungsora_repo()
     return await repo.update_parent_profile(
         parent_id, body.model_dump(exclude_none=True)

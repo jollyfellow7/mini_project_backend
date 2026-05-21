@@ -1,13 +1,33 @@
+# API 컨테이너 빌드 컨텍스트 — 런타임에 불필요한 항목 제외
+
+# Secrets & local env
 .env
 .env.*
+
+# VCS & CI
 .git
 .github
+
+# Python caches & virtualenv
 __pycache__
 *.py[cod]
 *.pyo
 .pytest_cache
 .mypy_cache
 .ruff_cache
+.venv
+venv
+
+# Host-mounted at deploy (GHA: /var/lib/mini-cleaning/uploads)
 uploads/
+
+# Ops / docs (EC2 컨테이너 미사용)
+tools/
+scripts/
+docs/
 *.md
 TEAM_SETUP.md
+README.md
+
+# Tests (추가 시)
+tests/

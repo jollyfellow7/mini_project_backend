@@ -7,7 +7,8 @@ import jwt
 from core.config import settings
 
 _ALGORITHM = "HS256"
-_EXPIRE_DAYS = 7
+_EXPIRE_DAYS = 7          # 부모 토큰: 7일
+_CHILD_EXPIRE_DAYS = 365  # 자녀 디바이스 토큰: 1년 (재페어링 방지)
 
 
 def create_access_token(payload: dict[str, Any]) -> str:
@@ -20,9 +21,14 @@ def create_access_token(payload: dict[str, Any]) -> str:
 
 
 def create_child_token(device_id: str, parent_id: int) -> str:
-    return create_access_token(
-        {"sub": device_id, "pid": str(parent_id), "typ": "child"}
-    )
+    secret = settings.JWT_SECRET or "dev-insecure-change-me"
+    data = {
+        "sub": device_id,
+        "pid": str(parent_id),
+        "typ": "child",
+        "exp": datetime.now(timezone.utc) + timedelta(days=_CHILD_EXPIRE_DAYS),
+    }
+    return jwt.encode(data, secret, algorithm=_ALGORITHM)
 
 
 def decode_access_token(token: str) -> dict[str, Any] | None:
