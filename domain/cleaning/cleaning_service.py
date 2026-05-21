@@ -44,21 +44,6 @@ def _monster_from_id(mid: str, location: str) -> DetectedMonster:
     )
 
 
-def _fallback_scan(room_name: str) -> ScanResponse:
-    t = _TEMPLATE_MAP["clutter_wyrm"]
-    return ScanResponse(
-        monsters=[DetectedMonster(
-            id=t["id"], name=t["name"], grade=t["grade"], location=room_name,
-            icon=t["icon"], ability=t["ability"], ability_desc=t["ability_desc"],
-            exp=t["exp"], gold=t["gold"],
-        )],
-        pollution_level=40,
-        summary="AI 연결 실패. 기본 마수가 소환되었습니다.",
-        model_id="fallback",
-        model_label=format_model_label("fallback"),
-    )
-
-
 class CleaningService:
     async def get_ai_info(self) -> AiInfoResponse:
         vision = VISION_MODEL_ORDER[0]
@@ -98,7 +83,7 @@ class CleaningService:
             )
         except Exception as e:
             logger.warning("[scan] Gemini failed: %s", e)
-            return _fallback_scan(room_name)
+            raise RuntimeError("scan_failed") from e
 
     async def verify_cleanliness(self, image_bytes: bytes, room_name: str) -> VerifyResponse:
         prompt = (
@@ -120,12 +105,7 @@ class CleaningService:
             )
         except Exception as e:
             logger.warning("[verify] Gemini failed: %s", e)
-            return VerifyResponse(
-                cleanliness=85,
-                comment="AI 채점을 사용할 수 없어 기본 점수를 적용했습니다.",
-                model_id="fallback",
-                model_label=format_model_label("fallback"),
-            )
+            raise RuntimeError("verify_failed") from e
 
     async def evaluate_baseline(self, image_bytes: bytes, slot_label: str) -> BaselineEvalResponse:
         prompt = (
@@ -201,11 +181,7 @@ class CleaningService:
             )
         except Exception as e:
             logger.warning("[chat] Gemini failed: %s", e)
-            return ChatResponse(
-                reply="AI 코치에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.",
-                model_id="fallback",
-                model_label=format_model_label("fallback"),
-            )
+            raise RuntimeError("chat_failed") from e
 
 
 _service = CleaningService()

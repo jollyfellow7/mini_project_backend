@@ -39,6 +39,8 @@ async def scan_room(
     image_bytes = await file.read()
     try:
         return await cleaning_service.scan_room(image_bytes, room_name)
+    except RuntimeError:
+        raise HTTPException(status_code=502, detail="AI 스캔에 실패했습니다. GEMINI_API_KEY를 확인해 주세요.")
     except Exception as e:
         logger.error("[cleaning] /scan error: %s", e)
         raise HTTPException(status_code=500, detail="스캔 중 오류가 발생했습니다.")
@@ -53,6 +55,8 @@ async def verify_room(
     image_bytes = await file.read()
     try:
         return await cleaning_service.verify_cleanliness(image_bytes, room_name)
+    except RuntimeError:
+        raise HTTPException(status_code=502, detail="AI 채점에 실패했습니다. GEMINI_API_KEY를 확인해 주세요.")
     except Exception as e:
         logger.error("[cleaning] /verify error: %s", e)
         raise HTTPException(status_code=500, detail="채점 중 오류가 발생했습니다.")
@@ -92,6 +96,8 @@ async def compare_baseline(
 async def coach_chat(body: ChatRequest) -> ChatResponse:
     try:
         return await cleaning_service.coach_chat(body.model_dump())
+    except RuntimeError:
+        raise HTTPException(status_code=502, detail="AI 코치에 연결할 수 없습니다.")
     except Exception as e:
         logger.error("[cleaning] /chat error: %s", e)
         raise HTTPException(status_code=500, detail="AI 코치 응답 오류.")
