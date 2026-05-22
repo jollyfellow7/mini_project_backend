@@ -22,6 +22,8 @@ class ProfileBody(BaseModel):
     allow_phone: bool | None = None
     allowlist: list[str] | None = None
     baseline_url: str | None = None
+    baseline_urls: list[str | None] | None = None  # 슬롯별 baseline 사진 URL 목록
+    baseline_verified: bool | None = None           # 베이스라인 촬영 완료 여부 (프론트 CaptureCoachBody에서 true로 저장)
     notification_prefs: dict | None = None
     coach_character_id: CoachCharacterId | None = None
     child_coach_character_id: CoachCharacterId | None = None

@@ -274,6 +274,26 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
                 at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        # ── ON CONFLICT 대상 제약을 항상 보장 ──────────────────────────────
+        # cleaning_logs(parent_account_id, log_date)·praise_presets(parent_account_id, phrase)
+        # 복합 제약은 기존에 migrate_per_user_isolation() 안에서만 생성됐는데,
+        # 그 함수는 parent_accounts 가 비어 있으면 곧바로 return 한다(부모 0명인 신규/초기화 DB).
+        # 그 결과 첫 회원가입의 praise 시드(ON CONFLICT (parent_account_id, phrase))와
+        # 모든 로그 쓰기(ensure_log 의 ON CONFLICT (parent_account_id, log_date))가
+        # "no unique or exclusion constraint matching the ON CONFLICT specification" 로 실패했다.
+        # → 부모 유무와 무관하게 idempotent 하게 항상 생성한다.
+        await conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS cleaning_logs_parent_date_uidx
+            ON cleaning_logs (parent_account_id, log_date)
+            """
+        )
+        await conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS praise_presets_parent_phrase_uidx
+            ON praise_presets (parent_account_id, phrase)
+            """
+        )
         from domain.chungsora.schema_migrations import migrate_per_user_isolation
 
         await migrate_per_user_isolation(conn)
@@ -616,12 +636,27 @@ class ChungsoraRepository:
                 url,
             )
 
+    async def _resolve_child_name(self, parent_id: int) -> str:
+        """등록된 자녀 이름을 반환. 미등록이면 기본값 '자녀'."""
+        profile = await self.get_parent_by_id(parent_id)
+        if not profile:
+            return "자녀"
+        name = (profile.get("child_display_name") or "").strip()
+        return name if name else "자녀"
+
     async def add_message(
         self, parent_id: int, date_str: str, role: str, text: str, badge: str | None
     ) -> dict:
         await self.ensure_log(parent_id, date_str)
         d = datetime.strptime(date_str, "%Y-%m-%d").date()
         msg_id = f"m-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+
+        # 등록된 자녀 이름이 있으면, 메시지 텍스트의 기본값 "자녀" 자리에 실제 이름으로 치환
+        child_name = await self._resolve_child_name(parent_id)
+        resolved_text = text.strip()
+        if child_name != "자녀":
+            resolved_text = resolved_text.replace("자녀", child_name)
+
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
@@ -632,13 +667,13 @@ class ChungsoraRepository:
                 parent_id,
                 d,
                 role,
-                text.strip(),
+                resolved_text,
                 badge.strip() if badge else None,
             )
         msg: dict[str, Any] = {
             "id": msg_id,
             "role": role,
-            "text": text.strip(),
+            "text": resolved_text,
             "at": _now_iso(),
         }
         if badge:
