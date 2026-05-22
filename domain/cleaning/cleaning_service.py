@@ -250,47 +250,6 @@ async def compare_with_baseline(
 
 async def coach_chat(body: dict[str, Any]) -> ChatResponse:
     return await _service.coach_chat(body)
-            '{"cleanliness": 85, "comment": "책상 정리가 잘 됐고 바닥도 깨끗해요."}'
-        )
-        try:
-            raw, model_id = await gemini.generate_vision_pair(
-                baseline_bytes, after_bytes, prompt
-            )
-            data = gemini.parse_json_response(raw)
-            cleanliness = max(0, min(100, int(data.get("cleanliness", 0))))
-            comment = str(data.get("comment", "비교 채점 완료."))[:300]
-            return VerifyResponse(
-                cleanliness=cleanliness,
-                comment=comment,
-                model_id=model_id,
-                model_label=format_model_label(model_id),
-            )
-        except Exception as e:
-            logger.warning("[compare-baseline] Gemini failed: %s", e)
-            raise RuntimeError("compare_baseline_failed") from e
-
-    async def coach_chat(self, body: dict[str, Any]) -> ChatResponse:
-        history = body.get("history") or []
-        hist_lines = "\n".join(
-            f"{m.get('role', 'user')}: {m.get('content', '')}" for m in history[-6:]
-        )
-        prompt = (
-            f"당신은 '{body.get('room_name', '방')}' 청소 코치입니다. "
-            f"오염도 {body.get('pollution_level', 0)}, 남은 마수: {body.get('monsters_remaining', [])}.\n"
-            f"{hist_lines}\n"
-            f"사용자: {body.get('user_message', '')}\n"
-            "한국어로 2~4문장만 답하세요."
-        )
-        try:
-            reply, model_id = await gemini.generate_text(prompt)
-            return ChatResponse(
-                reply=reply[:2000],
-                model_id=model_id,
-                model_label=format_model_label(model_id),
-            )
-        except Exception as e:
-            logger.warning("[chat] Gemini failed: %s", e)
-            raise RuntimeError("chat_failed") from e
 
 
 _service = CleaningService()
