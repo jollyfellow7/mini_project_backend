@@ -33,6 +33,19 @@ class VerifyResponse(BaseModel):
     model_label: str = ""
 
 
+class CompareBaselineResponse(VerifyResponse):
+    """compare-baseline 전용 응답.
+
+    기존 VerifyResponse 의 cleanliness/comment/model_* 를 그대로 포함하고(하위호환),
+    부모가 정한 통과 기준(pass_score)과의 비교 결과를 서버에서 함께 내려준다.
+    프론트는 추가 필드를 무시해도 동작하지만, passed 를 신뢰해 잠금 해제를 결정할 수 있다.
+    """
+
+    pass_score: int = 70          # 적용된 부모 기준 점수
+    passed: bool = False          # cleanliness >= pass_score 여부 (서버 판정)
+    pass_score_source: str = "default"  # "policy" | "override" | "default"
+
+
 class BaselineEvalResponse(BaseModel):
     quality_score: int
     acceptable: bool

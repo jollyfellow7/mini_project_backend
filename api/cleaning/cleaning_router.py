@@ -3,14 +3,16 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 
 from core.database import get_pool
+from core.jwt_utils import decode_access_token
 from domain.cleaning.cleaning_dto import (
     AiInfoResponse,
     BaselineEvalResponse,
     ChatRequest,
     ChatResponse,
+    CompareBaselineResponse,
     MemoryRequest,
     MemoryResponse,
     ScanResponse,
@@ -18,11 +20,49 @@ from domain.cleaning.cleaning_dto import (
 )
 from domain.cleaning.cleaning_repository import CleaningRepository
 from domain.cleaning import cleaning_service
+from domain.chungsora.chungsora_repository import get_chungsora_repo
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 GUEST_USER_ID = "guest"
+DEFAULT_PASS_SCORE = 70
+
+
+def _parent_id_from_auth(authorization: str | None) -> int | None:
+    """compare-baseline 은 인증 없이도(게스트) 동작하므로, 토큰이 있으면 부모 id 를
+    추출하고 없거나 잘못되면 None 을 반환한다(예외 던지지 않음)."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:].strip()
+    if not token:
+        return None
+    payload = decode_access_token(token)
+    if not payload:
+        return None
+    # 부모 토큰: sub=parent_id / 자녀 토큰: typ=child, pid=parent_id
+    if payload.get("typ") == "child":
+        return int(payload["pid"]) if "pid" in payload else None
+    return int(payload["sub"]) if "sub" in payload else None
+
+
+async def _resolve_pass_score(
+    authorization: str | None, override: int | None
+) -> tuple[int, str]:
+    """적용할 통과 기준 점수와 출처를 결정한다.
+    우선순위: 명시 override > 부모 계정 정책(pass_score) > 기본값(70)."""
+    if override is not None:
+        return max(0, min(100, override)), "override"
+    parent_id = _parent_id_from_auth(authorization)
+    if parent_id is not None:
+        try:
+            repo = await get_chungsora_repo()
+            profile = await repo.get_parent_by_id(parent_id)
+            if profile and profile.get("pass_score") is not None:
+                return int(profile["pass_score"]), "policy"
+        except Exception as e:  # DB 문제로 채점 자체를 막지 않는다
+            logger.warning("[compare-baseline] pass_score lookup failed: %s", e)
+    return DEFAULT_PASS_SCORE, "default"
 
 
 @router.get("/ai-info", response_model=AiInfoResponse)
@@ -75,21 +115,35 @@ async def baseline_eval(
         raise HTTPException(status_code=502, detail="baseline AI 평가에 실패했습니다.")
 
 
-@router.post("/compare-baseline", response_model=VerifyResponse)
+@router.post("/compare-baseline", response_model=CompareBaselineResponse)
 async def compare_baseline(
     baseline_file: UploadFile = File(...),
     after_file: UploadFile = File(...),
     slot_label: str = Form(...),
-) -> VerifyResponse:
+    pass_score: int | None = Form(default=None),
+    authorization: str | None = Header(default=None),
+) -> CompareBaselineResponse:
     baseline_bytes = await baseline_file.read()
     after_bytes = await after_file.read()
     try:
-        return await cleaning_service.compare_with_baseline(
+        result = await cleaning_service.compare_with_baseline(
             baseline_bytes, after_bytes, slot_label
         )
     except Exception as e:
         logger.error("[cleaning] /compare-baseline error: %s", e)
         raise HTTPException(status_code=502, detail="baseline 비교 채점에 실패했습니다.")
+
+    # 부모가 정한 통과 기준(pass_score)과의 비교를 서버에서 판정한다.
+    effective_pass, source = await _resolve_pass_score(authorization, pass_score)
+    return CompareBaselineResponse(
+        cleanliness=result.cleanliness,
+        comment=result.comment,
+        model_id=result.model_id,
+        model_label=result.model_label,
+        pass_score=effective_pass,
+        passed=result.cleanliness >= effective_pass,
+        pass_score_source=source,
+    )
 
 
 @router.post("/chat", response_model=ChatResponse)

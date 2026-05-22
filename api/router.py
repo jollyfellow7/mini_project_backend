@@ -12,6 +12,7 @@ from api.lock.lock_router import router as lock_router
 from api.rewards.rewards_router import router as rewards_router
 from api.auth.auth_router import router as auth_router
 from api.points.points_router import router as points_router
+from api.tts.tts_router import router as tts_router
 
 api_router = APIRouter()
 api_router.include_router(cleaning_router, prefix="/cleaning", tags=["cleaning"])
@@ -25,3 +26,4 @@ api_router.include_router(lock_router, prefix="/lock", tags=["lock"])
 api_router.include_router(rewards_router, prefix="/rewards", tags=["rewards"])
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
 api_router.include_router(points_router, prefix="/points", tags=["points"])
+api_router.include_router(tts_router, prefix="/tts", tags=["tts"])

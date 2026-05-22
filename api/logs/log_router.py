@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from api.deps.auth_deps import FamilyContext, get_family_context
 from core.upload_paths import resolve_upload_logs_root
+from core.storage import get_storage, guess_content_type
 from domain.chungsora.chungsora_repository import get_chungsora_repo
 
 router = APIRouter()
@@ -134,19 +135,17 @@ async def upload_photo(
 
     content = b"".join(chunks)
 
-    dest_dir = _UPLOAD_ROOT / str(ctx.parent_id) / date
-    dest_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{phase}_{slot}" if slot is not None else phase
-    dest = dest_dir / f"{stem}{suffix}"
+    # storage 키: 로컬이면 <upload_root>/logs/...(=/uploads/logs/...),
+    # S3 면 <S3_PREFIX>/logs/... 로 저장된다. URL 은 backend 가 결정.
+    key = f"logs/{ctx.parent_id}/{date}/{stem}{suffix}"
+    content_type = guess_content_type(f"x{suffix}", default="image/jpeg")
 
-    # 동기 파일 쓰기를 스레드풀로 분리 — 이벤트 루프 블로킹 방지
     try:
-        await asyncio.to_thread(_write_bytes_sync, dest, content)
+        url = await get_storage().save_bytes(key, content, content_type)
     except Exception as exc:
-        logger.error("[upload_photo] 파일 저장 실패 path=%s: %s", dest, exc)
+        logger.error("[upload_photo] 파일 저장 실패 key=%s: %s", key, exc)
         raise HTTPException(status_code=500, detail="파일 저장 중 오류가 발생했습니다.")
-
-    url = f"/uploads/logs/{ctx.parent_id}/{date}/{stem}{suffix}"
     repo = await get_chungsora_repo()
     try:
         if phase == "baseline":
