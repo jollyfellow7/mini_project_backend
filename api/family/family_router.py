@@ -4,7 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-CoachCharacterId = Literal["jiu", "seoyeon", "hajun"]
+# TTS 페르소나 5종 (domain/tts/tts_service.py 와 동일)
+CoachCharacterId = Literal["mate", "director", "quest", "coach", "mentor"]
 
 from api.deps.auth_deps import FamilyContext, get_current_parent_id, get_family_context
 from domain.chungsora.chungsora_repository import get_chungsora_repo
@@ -27,6 +28,8 @@ class ProfileBody(BaseModel):
     notification_prefs: dict | None = None
     coach_character_id: CoachCharacterId | None = None
     child_coach_character_id: CoachCharacterId | None = None
+    coach_informal_mode: bool | None = None
+    child_coach_informal_mode: bool | None = None
 
 
 @router.get("/summary")

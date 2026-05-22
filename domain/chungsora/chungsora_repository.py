@@ -14,7 +14,13 @@ import asyncpg
 logger = logging.getLogger(__name__)
 
 BASELINE_SLOT_COUNT = 3
-COACH_CHARACTER_IDS = frozenset({"jiu", "seoyeon", "hajun"})
+# TTS 페르소나 5종 (백엔드 domain/tts/tts_service.py 와 동일한 id)
+COACH_CHARACTER_IDS = frozenset({"mate", "director", "quest", "coach", "mentor"})
+# 부모 미설정 시 기본 = 존댓말(반말 미지원) 페르소나
+DEFAULT_COACH_ID = "mentor"
+# 구버전 캐릭터(지우/서연/하준) → 5종 페르소나 매핑
+# jiu 는 과거 DB 기본값이었으므로 '미설정=기본' 의미로 보고 존댓말 기본(mentor)에 매핑한다.
+_LEGACY_COACH_MAP = {"jiu": "mentor", "seoyeon": "mentor", "hajun": "coach"}
 
 
 def _normalize_coach_id(value: Any) -> str | None:
@@ -23,7 +29,9 @@ def _normalize_coach_id(value: Any) -> str | None:
     s = str(value).strip().lower()
     if s in COACH_CHARACTER_IDS:
         return s
-    return "jiu"
+    if s in _LEGACY_COACH_MAP:
+        return _LEGACY_COACH_MAP[s]
+    return DEFAULT_COACH_ID
 
 
 def _streak_mult(streak_days: int) -> float:
@@ -40,7 +48,26 @@ def _effective_coach_id(profile: dict) -> str:
     child = _normalize_coach_id(profile.get("child_coach_character_id"))
     if child:
         return child
-    return _normalize_coach_id(profile.get("coach_character_id")) or "jiu"
+    return _normalize_coach_id(profile.get("coach_character_id")) or DEFAULT_COACH_ID
+
+
+# tts_service 의 페르소나별 반말 지원 여부 (반말 미지원이면 informal 무시)
+_INFORMAL_SUPPORTED = frozenset({"mate", "coach"})
+
+
+def _persona_supports_informal(persona_id: Any) -> bool:
+    return _normalize_coach_id(persona_id) in _INFORMAL_SUPPORTED
+
+
+def _effective_informal_mode(profile: dict) -> bool:
+    """child 오버라이드 우선, 없으면 family 기본. 반말 미지원 페르소나면 항상 False."""
+    child_id = _normalize_coach_id(profile.get("child_coach_character_id"))
+    if child_id:
+        informal = bool(profile.get("child_coach_informal_mode"))
+        return informal and _persona_supports_informal(child_id)
+    family_id = _normalize_coach_id(profile.get("coach_character_id")) or DEFAULT_COACH_ID
+    informal = bool(profile.get("coach_informal_mode"))
+    return informal and _persona_supports_informal(family_id)
 
 
 def _normalize_upload_path(url: str | None) -> str | None:
@@ -218,9 +245,42 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
             ALTER TABLE parent_accounts
             ADD COLUMN IF NOT EXISTS coach_character_id VARCHAR(20) NOT NULL DEFAULT 'jiu'
         """)
+        # 신규 계정 기본 안내 친구 = 존댓말(mentor) 로 변경 (기존 컬럼 기본값 갱신)
+        await conn.execute("""
+            ALTER TABLE parent_accounts
+            ALTER COLUMN coach_character_id SET DEFAULT 'mentor'
+        """)
         await conn.execute("""
             ALTER TABLE parent_accounts
             ADD COLUMN IF NOT EXISTS child_coach_character_id VARCHAR(20)
+        """)
+        # 반말 모드 (TTS 페르소나) — family 기본 / 자녀 오버라이드
+        await conn.execute("""
+            ALTER TABLE parent_accounts
+            ADD COLUMN IF NOT EXISTS coach_informal_mode BOOLEAN NOT NULL DEFAULT FALSE
+        """)
+        await conn.execute("""
+            ALTER TABLE parent_accounts
+            ADD COLUMN IF NOT EXISTS child_coach_informal_mode BOOLEAN
+        """)
+        # 안내 친구(페르소나) 변경 이력 — 부모·자녀 모두 조회, 부모 알림용
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS persona_change_log (
+                id                  SERIAL PRIMARY KEY,
+                parent_account_id   INT NOT NULL REFERENCES parent_accounts(id),
+                changed_by          VARCHAR(10) NOT NULL,   -- 'parent' | 'child'
+                scope               VARCHAR(10) NOT NULL,   -- 'family'  | 'child'
+                from_persona        VARCHAR(20),
+                to_persona          VARCHAR(20) NOT NULL,
+                from_informal       BOOLEAN,
+                to_informal         BOOLEAN NOT NULL DEFAULT FALSE,
+                parent_seen         BOOLEAN NOT NULL DEFAULT FALSE,
+                at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS persona_change_log_parent_at_idx
+            ON persona_change_log (parent_account_id, at DESC)
         """)
         await conn.execute("""
             ALTER TABLE shop_rewards
@@ -407,7 +467,8 @@ class ChungsoraRepository:
                 SELECT id, login_id, display_name, onboard_done, child_display_name,
                        points_balance, base_clean_won, lock_time, lock_days, pass_score,
                        allow_phone, allowlist, baseline_url, baseline_urls, baseline_verified,
-                       notification_prefs, coach_character_id, child_coach_character_id
+                       notification_prefs, coach_character_id, child_coach_character_id,
+                       coach_informal_mode, child_coach_informal_mode
                 FROM parent_accounts WHERE id = $1
                 """,
                 parent_id,
@@ -444,6 +505,12 @@ class ChungsoraRepository:
             "notification_prefs": prefs,
             "coach_character_id": _normalize_coach_id(row["coach_character_id"]),
             "child_coach_character_id": _normalize_coach_id(row["child_coach_character_id"]),
+            "coach_informal_mode": bool(row["coach_informal_mode"]),
+            "child_coach_informal_mode": (
+                None
+                if row["child_coach_informal_mode"] is None
+                else bool(row["child_coach_informal_mode"])
+            ),
         }
 
     async def update_parent_profile(self, parent_id: int, body: dict) -> dict:
@@ -462,6 +529,8 @@ class ChungsoraRepository:
             "notification_prefs",
             "coach_character_id",
             "child_coach_character_id",
+            "coach_informal_mode",
+            "child_coach_informal_mode",
         }
         fields = {k: v for k, v in body.items() if k in allowed and v is not None}
         if "coach_character_id" in fields:
@@ -493,6 +562,157 @@ class ChungsoraRepository:
         profile = await self.get_parent_by_id(parent_id)
         return profile or {}
 
+    # ──────────────────────────────────────────────
+    # 안내 친구(페르소나) — 부모/자녀 변경 + 변경 이력
+    # ──────────────────────────────────────────────
+    async def update_persona(
+        self,
+        parent_id: int,
+        is_parent: bool,
+        persona_id: str,
+        informal_mode: bool,
+    ) -> dict:
+        """부모면 family 기본, 자녀면 자녀 오버라이드를 갱신하고 변경 이력을 남긴다.
+
+        반말 미지원 페르소나는 informal_mode 를 무시(False 저장)한다.
+        """
+        persona_id = _normalize_coach_id(persona_id) or DEFAULT_COACH_ID
+        effective_informal = bool(informal_mode) and _persona_supports_informal(persona_id)
+
+        before = await self.get_parent_by_id(parent_id)
+        if not before:
+            return {}
+
+        if is_parent:
+            scope, changed_by = "family", "parent"
+            from_persona = _normalize_coach_id(before.get("coach_character_id"))
+            from_informal = bool(before.get("coach_informal_mode"))
+            await self.update_parent_profile(
+                parent_id,
+                {
+                    "coach_character_id": persona_id,
+                    "coach_informal_mode": effective_informal,
+                },
+            )
+        else:
+            scope, changed_by = "child", "child"
+            from_persona = _normalize_coach_id(before.get("child_coach_character_id"))
+            from_informal = before.get("child_coach_informal_mode")
+            await self.update_parent_profile(
+                parent_id,
+                {
+                    "child_coach_character_id": persona_id,
+                    "child_coach_informal_mode": effective_informal,
+                },
+            )
+
+        changed = (from_persona != persona_id) or (bool(from_informal) != effective_informal)
+        if changed:
+            await self._record_persona_change(
+                parent_id=parent_id,
+                changed_by=changed_by,
+                scope=scope,
+                from_persona=from_persona,
+                to_persona=persona_id,
+                from_informal=from_informal,
+                to_informal=effective_informal,
+                # 부모 본인 변경은 알림 필요 없음 → seen=True
+                parent_seen=(changed_by == "parent"),
+            )
+
+        summary = await self.get_family_summary(parent_id)
+        return {
+            "scope": scope,
+            "persona_id": persona_id,
+            "informal_mode": effective_informal,
+            "effective_coach_character_id": summary.get("effective_coach_character_id"),
+            "effective_informal_mode": summary.get("effective_informal_mode"),
+        }
+
+    async def _record_persona_change(
+        self,
+        parent_id: int,
+        changed_by: str,
+        scope: str,
+        from_persona: str | None,
+        to_persona: str,
+        from_informal: Any,
+        to_informal: bool,
+        parent_seen: bool,
+    ) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO persona_change_log
+                    (parent_account_id, changed_by, scope, from_persona, to_persona,
+                     from_informal, to_informal, parent_seen)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                parent_id,
+                changed_by,
+                scope,
+                from_persona,
+                to_persona,
+                None if from_informal is None else bool(from_informal),
+                bool(to_informal),
+                parent_seen,
+            )
+
+    async def _count_persona_history_unseen(self, parent_id: int) -> int:
+        async with self._pool.acquire() as conn:
+            val = await conn.fetchval(
+                """
+                SELECT COUNT(*)::int FROM persona_change_log
+                WHERE parent_account_id = $1 AND changed_by = 'child' AND parent_seen = FALSE
+                """,
+                parent_id,
+            )
+        return int(val or 0)
+
+    async def get_persona_history(self, parent_id: int, limit: int = 20) -> dict:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, changed_by, scope, from_persona, to_persona,
+                       from_informal, to_informal, parent_seen, at
+                FROM persona_change_log
+                WHERE parent_account_id = $1
+                ORDER BY at DESC
+                LIMIT $2
+                """,
+                parent_id,
+                max(1, min(limit, 100)),
+            )
+        items = [
+            {
+                "id": r["id"],
+                "changed_by": r["changed_by"],
+                "scope": r["scope"],
+                "from_persona": r["from_persona"],
+                "to_persona": r["to_persona"],
+                "from_informal": r["from_informal"],
+                "to_informal": bool(r["to_informal"]),
+                "parent_seen": bool(r["parent_seen"]),
+                "at": r["at"].isoformat(),
+            }
+            for r in rows
+        ]
+        return {
+            "items": items,
+            "unseen_count": await self._count_persona_history_unseen(parent_id),
+        }
+
+    async def mark_persona_history_seen(self, parent_id: int) -> dict:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE persona_change_log SET parent_seen = TRUE
+                WHERE parent_account_id = $1 AND parent_seen = FALSE
+                """,
+                parent_id,
+            )
+        return {"ok": True, "unseen_count": 0}
+
     async def get_family_summary(self, parent_id: int) -> dict:
         profile = await self.get_parent_by_id(parent_id)
         if not profile:
@@ -507,9 +727,13 @@ class ChungsoraRepository:
             "base_clean_won": profile["base_clean_won"],
             "streak_days": streak,
             "streak_mult": mult,
-            "coach_character_id": profile.get("coach_character_id") or "jiu",
+            "coach_character_id": _normalize_coach_id(profile.get("coach_character_id")) or DEFAULT_COACH_ID,
             "child_coach_character_id": profile.get("child_coach_character_id"),
             "effective_coach_character_id": _effective_coach_id(profile),
+            "coach_informal_mode": bool(profile.get("coach_informal_mode")),
+            "child_coach_informal_mode": profile.get("child_coach_informal_mode"),
+            "effective_informal_mode": _effective_informal_mode(profile),
+            "persona_history_unseen": await self._count_persona_history_unseen(parent_id),
             "lock_time": profile["lock_time"],
             "lock_days": profile["lock_days"],
             "pass_score": profile["pass_score"],

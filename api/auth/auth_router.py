@@ -53,7 +53,7 @@ async def parent_me(parent_id: int = Depends(get_current_parent_id)):
         "lock_days": profile["lock_days"],
         "pass_score": profile["pass_score"],
         "notification_prefs": profile["notification_prefs"],
-        "coach_character_id": profile.get("coach_character_id") or "jiu",
+        "coach_character_id": profile.get("coach_character_id") or "mentor",
         "child_coach_character_id": profile.get("child_coach_character_id"),
         "token": create_access_token(
             {"sub": str(profile["id"]), "login_id": profile["login_id"]}
