@@ -250,32 +250,3 @@ async def compare_with_baseline(
 
 async def coach_chat(body: dict[str, Any]) -> ChatResponse:
     return await _service.coach_chat(body)
-
-
-_service = CleaningService()
-
-
-async def get_ai_info() -> AiInfoResponse:
-    return await _service.get_ai_info()
-
-
-async def scan_room(image_bytes: bytes, room_name: str) -> ScanResponse:
-    return await _service.scan_room(image_bytes, room_name)
-
-
-async def verify_cleanliness(image_bytes: bytes, room_name: str) -> VerifyResponse:
-    return await _service.verify_cleanliness(image_bytes, room_name)
-
-
-async def evaluate_baseline(image_bytes: bytes, slot_label: str) -> BaselineEvalResponse:
-    return await _service.evaluate_baseline(image_bytes, slot_label)
-
-
-async def compare_with_baseline(
-    baseline_bytes: bytes, after_bytes: bytes, slot_label: str
-) -> VerifyResponse:
-    return await _service.compare_with_baseline(baseline_bytes, after_bytes, slot_label)
-
-
-async def coach_chat(body: dict[str, Any]) -> ChatResponse:
-    return await _service.coach_chat(body)
