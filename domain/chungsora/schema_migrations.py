@@ -187,4 +187,41 @@ async def migrate_per_user_isolation(conn: asyncpg.Connection) -> None:
             default_parent,
         )
 
+    await conn.execute(
+        """
+        ALTER TABLE parent_accounts
+        ADD COLUMN IF NOT EXISTS lock_dates VARCHAR(500) NOT NULL DEFAULT ''
+        """
+    )
+    await conn.execute(
+        """
+        ALTER TABLE parent_accounts
+        ADD COLUMN IF NOT EXISTS allowed_numbers JSONB NOT NULL DEFAULT '[]'::jsonb
+        """
+    )
+    await conn.execute(
+        """
+        ALTER TABLE parent_accounts
+        ADD COLUMN IF NOT EXISTS signup_bonus_paid BOOLEAN NOT NULL DEFAULT FALSE
+        """
+    )
+    await conn.execute(
+        """
+        ALTER TABLE daily_quests
+        ADD COLUMN IF NOT EXISTS reward_won INT NOT NULL DEFAULT 1000
+        """
+    )
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS daily_quest_completions (
+            id                SERIAL PRIMARY KEY,
+            parent_account_id INT NOT NULL REFERENCES parent_accounts(id) ON DELETE CASCADE,
+            quest_id          INT NOT NULL REFERENCES daily_quests(id) ON DELETE CASCADE,
+            completed_date    DATE NOT NULL,
+            created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (parent_account_id, quest_id, completed_date)
+        )
+        """
+    )
+
     logger.info("[chungsora] per-user schema migration applied")

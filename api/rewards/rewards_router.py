@@ -21,6 +21,7 @@ class ShopRewardPatchBody(BaseModel):
 class DailyQuestBody(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     description: str = ""
+    reward_won: int = Field(default=1000, ge=500, le=100000)
 
 
 @router.get("/shop")
@@ -72,7 +73,12 @@ async def create_daily_quest(
     parent_id: int = Depends(get_current_parent_id),
 ):
     repo = await get_chungsora_repo()
-    quests = await repo.create_daily_quest(parent_id, body.title, body.description)
+    quests = await repo.create_daily_quest(
+        parent_id,
+        body.title,
+        body.description,
+        body.reward_won,
+    )
     return {"quests": quests}
 
 
@@ -84,3 +90,12 @@ async def delete_daily_quest(
     repo = await get_chungsora_repo()
     quests = await repo.delete_daily_quest(parent_id, quest_id)
     return {"quests": quests}
+
+
+@router.post("/daily-quests/{quest_id}/complete")
+async def complete_daily_quest(
+    quest_id: int,
+    parent_id: int = Depends(get_current_parent_id),
+):
+    repo = await get_chungsora_repo()
+    return await repo.complete_daily_quest(parent_id, quest_id)

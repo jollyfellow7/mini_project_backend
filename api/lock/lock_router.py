@@ -11,9 +11,11 @@ router = APIRouter()
 class LockPolicyBody(BaseModel):
     lock_time: str | None = None
     lock_days: str | None = None
+    lock_dates: str | None = None
     pass_score: int | None = Field(default=None, ge=50, le=100)
     allow_phone: bool | None = None
     allowlist: list[str] | None = None
+    allowed_numbers: list[dict] | None = None
 
 
 @router.get("/policy")
