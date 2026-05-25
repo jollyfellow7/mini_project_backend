@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import asyncpg
-from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +111,6 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
                 login_id      VARCHAR(64) NOT NULL UNIQUE,
                 password_hash VARCHAR(128) NOT NULL,
                 display_name  VARCHAR(120) NOT NULL DEFAULT '',
-                lock_dates    VARCHAR(500) NOT NULL DEFAULT '',
-                allowed_numbers JSONB NOT NULL DEFAULT '[]'::jsonb,
-                signup_bonus_paid BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at    TIMESTAMPTZ DEFAULT NOW()
             )
         """)
@@ -185,28 +181,13 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
                 parent_account_id INT REFERENCES parent_accounts(id),
                 title       VARCHAR(120) NOT NULL,
                 description TEXT NOT NULL DEFAULT '',
-                reward_won  INT NOT NULL DEFAULT 1000,
                 active      BOOLEAN NOT NULL DEFAULT TRUE,
                 created_at  TIMESTAMPTZ DEFAULT NOW()
             )
         """)
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS daily_quest_completions (
-                id                SERIAL PRIMARY KEY,
-                parent_account_id INT NOT NULL REFERENCES parent_accounts(id) ON DELETE CASCADE,
-                quest_id          INT NOT NULL REFERENCES daily_quests(id) ON DELETE CASCADE,
-                completed_date    DATE NOT NULL,
-                created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE (parent_account_id, quest_id, completed_date)
-            )
-        """)
-        await conn.execute("""
             ALTER TABLE daily_quests
             ADD COLUMN IF NOT EXISTS parent_account_id INT REFERENCES parent_accounts(id)
-        """)
-        await conn.execute("""
-            ALTER TABLE daily_quests
-            ADD COLUMN IF NOT EXISTS reward_won INT NOT NULL DEFAULT 1000
         """)
         await conn.execute("""
             ALTER TABLE parent_accounts
@@ -238,23 +219,11 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
         """)
         await conn.execute("""
             ALTER TABLE parent_accounts
-            ADD COLUMN IF NOT EXISTS lock_dates VARCHAR(500) NOT NULL DEFAULT ''
-        """)
-        await conn.execute("""
-            ALTER TABLE parent_accounts
             ADD COLUMN IF NOT EXISTS allow_phone BOOLEAN NOT NULL DEFAULT TRUE
         """)
         await conn.execute("""
             ALTER TABLE parent_accounts
             ADD COLUMN IF NOT EXISTS allowlist JSONB NOT NULL DEFAULT '["dialer","com.chungsora.child"]'::jsonb
-        """)
-        await conn.execute("""
-            ALTER TABLE parent_accounts
-            ADD COLUMN IF NOT EXISTS allowed_numbers JSONB NOT NULL DEFAULT '[]'::jsonb
-        """)
-        await conn.execute("""
-            ALTER TABLE parent_accounts
-            ADD COLUMN IF NOT EXISTS signup_bonus_paid BOOLEAN NOT NULL DEFAULT FALSE
         """)
         await conn.execute("""
             ALTER TABLE parent_accounts
@@ -293,6 +262,14 @@ async def init_chungsora_tables(pool: asyncpg.Pool) -> None:
         await conn.execute("""
             ALTER TABLE parent_accounts
             ADD COLUMN IF NOT EXISTS child_coach_informal_mode BOOLEAN
+        """)
+        await conn.execute("""
+            ALTER TABLE parent_accounts
+            ADD COLUMN IF NOT EXISTS lock_dates TEXT NOT NULL DEFAULT ''
+        """)
+        await conn.execute("""
+            ALTER TABLE parent_accounts
+            ADD COLUMN IF NOT EXISTS allowed_numbers JSONB NOT NULL DEFAULT '[]'::jsonb
         """)
         # 안내 친구(페르소나) 변경 이력 — 부모·자녀 모두 조회, 부모 알림용
         await conn.execute("""
@@ -496,9 +473,8 @@ class ChungsoraRepository:
             row = await conn.fetchrow(
                 """
                 SELECT id, login_id, display_name, onboard_done, child_display_name,
-                       points_balance, base_clean_won, lock_time, lock_days, lock_dates, pass_score,
-                       allow_phone, allowlist, allowed_numbers, signup_bonus_paid,
-                       baseline_url, baseline_urls, baseline_verified,
+                       points_balance, base_clean_won, lock_time, lock_days, pass_score,
+                       allow_phone, allowlist, baseline_url, baseline_urls, baseline_verified,
                        notification_prefs, coach_character_id, child_coach_character_id,
                        coach_informal_mode, child_coach_informal_mode
                 FROM parent_accounts WHERE id = $1
@@ -510,9 +486,6 @@ class ChungsoraRepository:
         allowlist = row["allowlist"]
         if isinstance(allowlist, str):
             allowlist = json.loads(allowlist)
-        allowed_numbers = row["allowed_numbers"]
-        if isinstance(allowed_numbers, str):
-            allowed_numbers = json.loads(allowed_numbers)
         prefs = row["notification_prefs"]
         if isinstance(prefs, str):
             prefs = json.loads(prefs)
@@ -531,12 +504,9 @@ class ChungsoraRepository:
             "base_clean_won": row["base_clean_won"],
             "lock_time": row["lock_time"],
             "lock_days": row["lock_days"],
-            "lock_dates": row["lock_dates"],
             "pass_score": row["pass_score"],
             "allow_phone": row["allow_phone"],
             "allowlist": allowlist,
-            "allowed_numbers": allowed_numbers or [],
-            "signup_bonus_paid": bool(row["signup_bonus_paid"]),
             "baseline_url": row["baseline_url"],
             "baseline_urls": baseline_urls or [],
             "baseline_verified": bool(row["baseline_verified"]),
@@ -950,7 +920,7 @@ class ChungsoraRepository:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT log_date::text AS d, score, before_url
+                SELECT log_date::text AS d, score
                 FROM cleaning_logs
                 WHERE to_char(log_date, 'YYYY-MM') = $1
                   AND parent_account_id = $2
@@ -960,14 +930,7 @@ class ChungsoraRepository:
                 year_month,
                 parent_id,
             )
-        dates = [
-            {
-                "date": r["d"],
-                "score": r["score"],
-                "before_thumbnail": _normalize_upload_path(r["before_url"]),
-            }
-            for r in rows
-        ]
+        dates = [r["d"] for r in rows]
         total = sum(r["score"] for r in rows)
         points = balance if balance else (total or 0)
         return {"year_month": year_month, "dates": dates, "points": points}
@@ -1079,7 +1042,6 @@ class ChungsoraRepository:
     async def verify_pair_code(self, code: str) -> dict:
         code = code.strip().upper()
         now = datetime.now(timezone.utc)
-        signup_bonus = 0
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -1108,36 +1070,6 @@ class ChungsoraRepository:
                 device_id,
                 row["parent_account_id"],
             )
-            bonus_earned = await conn.fetchval(
-                """
-                UPDATE parent_accounts
-                SET signup_bonus_paid = TRUE
-                WHERE id = $1 AND signup_bonus_paid = FALSE
-                RETURNING 1
-                """,
-                row["parent_account_id"],
-            )
-            if bonus_earned:
-                signup_bonus = 5000
-                await conn.execute(
-                    """
-                    UPDATE parent_accounts
-                    SET points_balance = points_balance + $2
-                    WHERE id = $1
-                    """,
-                    row["parent_account_id"],
-                    signup_bonus,
-                )
-                await conn.execute(
-                    """
-                    INSERT INTO points_ledger (parent_account_id, amount, label, kind)
-                    VALUES ($1, $2, $3, $4)
-                    """,
-                    row["parent_account_id"],
-                    signup_bonus,
-                    "가입 축하",
-                    "earn",
-                )
         from core.jwt_utils import create_child_token
 
         parent_id = int(row["parent_account_id"])
@@ -1149,7 +1081,6 @@ class ChungsoraRepository:
             "parent_account_id": parent_id,
             "device_id": device_id,
             "device_token": token,
-            "signup_bonus": signup_bonus,
         }
 
     async def refresh_child_device_token(self, device_id: str) -> dict:
@@ -1183,11 +1114,11 @@ class ChungsoraRepository:
         return {
             "lock_time": profile["lock_time"],
             "lock_days": profile["lock_days"],
-            "lock_dates": profile["lock_dates"],
+            "lock_dates": profile.get("lock_dates") or "",
             "pass_score": profile["pass_score"],
             "allow_phone": profile["allow_phone"],
             "allowlist": profile["allowlist"],
-            "allowed_numbers": profile["allowed_numbers"],
+            "allowed_numbers": profile.get("allowed_numbers") or [],
         }
 
     async def put_lock_policy(self, parent_id: int, body: dict) -> dict:
@@ -1261,7 +1192,7 @@ class ChungsoraRepository:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT id, title, description, reward_won, active FROM daily_quests
+                SELECT id, title, description, active FROM daily_quests
                 WHERE parent_account_id = $1 AND active = TRUE
                 ORDER BY id DESC
                 """,
@@ -1272,24 +1203,22 @@ class ChungsoraRepository:
                 "id": str(r["id"]),
                 "title": r["title"],
                 "description": r["description"],
-                "reward_won": r["reward_won"],
                 "active": r["active"],
             }
             for r in rows
         ]
 
     async def create_daily_quest(
-        self, parent_id: int, title: str, description: str = "", reward_won: int = 1000
+        self, parent_id: int, title: str, description: str = ""
     ) -> list[dict]:
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO daily_quests (title, description, reward_won, parent_account_id)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO daily_quests (title, description, parent_account_id)
+                VALUES ($1, $2, $3)
                 """,
                 title.strip(),
                 description.strip(),
-                reward_won,
                 parent_id,
             )
         return await self.list_daily_quests(parent_id)
@@ -1305,74 +1234,6 @@ class ChungsoraRepository:
                 parent_id,
             )
         return await self.list_daily_quests(parent_id)
-
-    async def complete_daily_quest(self, parent_id: int, quest_id: int) -> dict:
-        today = datetime.now(timezone.utc).date()
-        async with self._pool.acquire() as conn:
-            quest = await conn.fetchrow(
-                """
-                SELECT id, title, reward_won, active
-                FROM daily_quests
-                WHERE id = $1 AND parent_account_id = $2
-                """,
-                quest_id,
-                parent_id,
-            )
-            if not quest or not quest["active"]:
-                return {"ok": False, "error": "not_found"}
-
-            completion_id = await conn.fetchval(
-                """
-                INSERT INTO daily_quest_completions (parent_account_id, quest_id, completed_date)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (parent_account_id, quest_id, completed_date) DO NOTHING
-                RETURNING id
-                """,
-                parent_id,
-                quest_id,
-                today,
-            )
-            if not completion_id:
-                balance = await conn.fetchval(
-                    "SELECT points_balance FROM parent_accounts WHERE id = $1",
-                    parent_id,
-                )
-                return {
-                    "ok": False,
-                    "quest_id": str(quest["id"]),
-                    "reward_won": 0,
-                    "already_done": True,
-                    "balance": int(balance or 0),
-                }
-
-            reward_won = int(quest["reward_won"] or 1000)
-            balance = await conn.fetchval(
-                """
-                UPDATE parent_accounts
-                SET points_balance = points_balance + $2
-                WHERE id = $1
-                RETURNING points_balance
-                """,
-                parent_id,
-                reward_won,
-            )
-            await conn.execute(
-                """
-                INSERT INTO points_ledger (parent_account_id, amount, label, kind)
-                VALUES ($1, $2, $3, $4)
-                """,
-                parent_id,
-                reward_won,
-                f"daily_quest_complete: {quest['title']}",
-                "earn",
-            )
-        return {
-            "ok": True,
-            "quest_id": str(quest["id"]),
-            "reward_won": reward_won,
-            "already_done": False,
-            "balance": int(balance or 0),
-        }
 
     async def adjust_points(
         self, parent_id: int, amount: int, label: str, kind: str
@@ -1456,14 +1317,6 @@ class ChungsoraRepository:
         mid = f"m-{uuid.uuid4().hex[:8]}"
         at = datetime.now(timezone.utc)
         async with self._pool.acquire() as conn:
-            balance = await conn.fetchval(
-                "SELECT points_balance FROM parent_accounts WHERE id = $1",
-                parent_id,
-            )
-            if balance is None:
-                raise HTTPException(status_code=404, detail="parent_not_found")
-            if int(balance) < 1000:
-                raise HTTPException(status_code=400, detail="minimum_balance_1000_required")
             await conn.execute(
                 """
                 INSERT INTO propose_threads (id, parent_account_id, label, points, status, updated_at)
