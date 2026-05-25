@@ -5,6 +5,13 @@
 !.env.example
 *.pem
 *.key
+*.p12
+
+# Firebase / Google 서비스 계정 (커밋 금지)
+google-services.json
+firebase-adminsdk*.json
+**/firebase-adminsdk*.json
+serviceAccount*.json
 
 .venv/
 venv/

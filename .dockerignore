@@ -3,6 +3,13 @@
 # Secrets & local env
 .env
 .env.*
+*.pem
+*.key
+google-services.json
+**/google-services.json
+firebase-adminsdk*.json
+**/firebase-adminsdk*.json
+serviceAccount*.json
 
 # VCS & CI
 .git
