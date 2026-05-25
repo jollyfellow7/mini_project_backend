@@ -473,8 +473,9 @@ class ChungsoraRepository:
             row = await conn.fetchrow(
                 """
                 SELECT id, login_id, display_name, onboard_done, child_display_name,
-                       points_balance, base_clean_won, lock_time, lock_days, pass_score,
-                       allow_phone, allowlist, baseline_url, baseline_urls, baseline_verified,
+                       points_balance, base_clean_won, lock_time, lock_days, lock_dates,
+                       pass_score, allow_phone, allowlist, allowed_numbers,
+                       baseline_url, baseline_urls, baseline_verified,
                        notification_prefs, coach_character_id, child_coach_character_id,
                        coach_informal_mode, child_coach_informal_mode
                 FROM parent_accounts WHERE id = $1
@@ -494,6 +495,9 @@ class ChungsoraRepository:
             baseline_urls = json.loads(baseline_urls)
         if not baseline_urls and row["baseline_url"]:
             baseline_urls = [row["baseline_url"]]
+        allowed_numbers = row["allowed_numbers"]
+        if isinstance(allowed_numbers, str):
+            allowed_numbers = json.loads(allowed_numbers)
         return {
             "id": row["id"],
             "login_id": row["login_id"],
@@ -504,9 +508,11 @@ class ChungsoraRepository:
             "base_clean_won": row["base_clean_won"],
             "lock_time": row["lock_time"],
             "lock_days": row["lock_days"],
+            "lock_dates": row["lock_dates"] or "",
             "pass_score": row["pass_score"],
             "allow_phone": row["allow_phone"],
             "allowlist": allowlist,
+            "allowed_numbers": allowed_numbers or [],
             "baseline_url": row["baseline_url"],
             "baseline_urls": baseline_urls or [],
             "baseline_verified": bool(row["baseline_verified"]),
